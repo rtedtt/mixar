@@ -1,0 +1,145 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function dev() { return signedIn() && request.auth.token.email == "belalbelalmoh@gmail.com"; }
+    function hasMe() { return signedIn() && exists(/databases/$(database)/documents/biz/$(request.auth.uid)); }
+    function me() { return get(/databases/$(database)/documents/biz/$(request.auth.uid)).data; }
+    function active() { return dev() || (hasMe() && me().status == "active"); }
+    function ws() { return me().ws; }
+    function coPath(w) { return /databases/$(database)/documents/companies/$(w); }
+    // الحسابات القديمة بلا مستند اشتراك تعمل كالمعتاد؛ الشركة المنتهية أو الموقوفة لا تكتب
+    function coLive(w) { return !exists(coPath(w)) || (get(coPath(w)).data.status == "active" && get(coPath(w)).data.expiresAt > request.time.toMillis()); }
+    function live() { return dev() || coLive(ws()); }
+    function isCoAdmin() { return active() && !dev() && me().role == "admin"; }
+    function can(p) {
+      return dev() || (active() && (me().get("perms", {}).get("isWorkspaceAdmin", false) || me().get("perms", {}).get(p, false)));
+    }
+    function mine() { return dev() || (active() && resource.data.workspaceId == ws()); }
+    function mineNew() { return dev() || (active() && request.resource.data.workspaceId == ws()); }
+    function notUser() { return resource.data.get("kind", "") != "user"; }
+    function newNotUser() { return request.resource.data.get("kind", "") != "user"; }
+    function inMyWs() { return dev() || (active() && resource.data.ws == ws()); }
+
+    // الشركات المشتركة
+    match /companies/{id} {
+      allow get: if dev() || (active() && id == ws());
+      allow list: if dev();
+      allow create: if signedIn() && id == request.auth.uid
+        && !exists(/databases/$(database)/documents/biz/$(request.auth.uid))
+        && request.resource.data.plan == "trial" && request.resource.data.status == "active"
+        && request.resource.data.expiresAt <= request.time.toMillis() + 31 * 86400000;
+      allow update: if isCoAdmin() && id == ws()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["name"]);
+      allow write: if dev();
+    }
+
+    // أكواد الشركات: يُقرأ كود واحد قبل الدخول، والإنشاء مرة واحدة فقط (لا تعديل)
+    match /codes/{code} {
+      allow get: if true;
+      allow create: if signedIn() && request.resource.data.keys().hasOnly(["ws"]) && request.resource.data.ws == request.auth.uid;
+      allow list, write: if dev();
+    }
+
+    match /biz/{id} {
+      allow get: if signedIn() && id == request.auth.uid;
+
+      // تسجيل شركة جديدة: مدير بمساحته الخاصة (يتطلب مستند الشركة التجريبي)
+      allow create: if signedIn() && id == request.auth.uid
+        && request.resource.data.kind == "user" && request.resource.data.status == "active"
+        && request.resource.data.role == "admin" && request.resource.data.ws == request.auth.uid
+        && exists(coPath(request.auth.uid));
+
+      // طلب انضمام لشركة موجودة
+      allow create: if signedIn() && id == request.auth.uid
+        && request.resource.data.kind == "user" && request.resource.data.status == "pending"
+        && request.resource.data.role == "accountant" && exists(coPath(request.resource.data.ws))
+        && request.resource.data.perms.isWorkspaceAdmin == false;
+
+      allow read, write: if dev();
+
+      // مدير الشركة: مستخدمو شركته فقط، المعلّقون والنشطون فقط
+      allow read: if isCoAdmin() && resource.data.kind == "user" && resource.data.ws == ws()
+        && resource.data.role in ["accountant", "admin"] && resource.data.status in ["pending", "active", "suspended"];
+      allow update: if isCoAdmin() && resource.data.kind == "user" && resource.data.ws == ws()
+        && resource.data.role == "accountant" && resource.data.status in ["pending", "active", "suspended"]
+        && request.resource.data.status in ["active", "suspended", "cancelled"]
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "perms"]);
+      allow delete: if isCoAdmin() && resource.data.kind == "user" && resource.data.ws == ws() && resource.data.status == "pending";
+
+      // سجلات الحركات
+      allow read: if notUser() && mine();
+      allow create: if newNotUser() && mineNew() && can("canAddTransactions") && live();
+      allow update: if notUser() && mine() && mineNew() && can("canEditDeleteTransactions") && live();
+      allow delete: if notUser() && mine() && can("canEditDeleteTransactions") && live();
+    }
+
+    match /vehicles/{id} {
+      allow read: if mine();
+      allow create: if mineNew() && can("canAddEquipment") && live();
+      allow update: if mine() && mineNew() && (can("canEditDeleteEquipment") || can("canAddTransactions")) && live();
+      allow delete: if mine() && can("canEditDeleteEquipment") && live();
+    }
+
+    match /advances/{id} {
+      allow read: if mine();
+      allow create: if mineNew() && can("canManageCustody") && live();
+      allow update: if mine() && mineNew() && can("canManageCustody") && live();
+      allow delete: if mine() && can("canManageCustody") && live();
+    }
+
+    match /{col}/{id} {
+      allow read: if col in ["expenses", "operations", "inventory", "costings", "materials", "acct"] && mine();
+      allow create: if col in ["expenses", "operations", "inventory", "costings", "materials", "acct"] && mineNew() && can("canAddTransactions") && live();
+      allow update: if col in ["expenses", "operations", "inventory", "costings", "materials", "acct"] && mine() && mineNew() && can("canEditDeleteTransactions") && live();
+      allow delete: if col in ["expenses", "operations", "inventory", "costings", "materials", "acct"] && mine() && can("canEditDeleteTransactions") && live();
+    }
+
+    match /users/{id} {
+      allow read: if active();
+      allow write: if dev();
+    }
+
+    match /auditlog/{id} {
+      allow create: if active();
+      allow read, delete: if dev();
+    }
+
+    match /password_requests/{id} {
+      allow create: if request.resource.data.keys().hasOnly(["who", "device", "at", "status"])
+        && request.resource.data.who is string && request.resource.data.who.size() < 100
+        && request.resource.data.device is string && request.resource.data.device.size() < 200
+        && request.resource.data.status == "open";
+      allow read, update, delete: if dev();
+    }
+
+    match /dev_logs/{id} {
+      allow create: if signedIn();
+      allow read, delete: if dev();
+    }
+
+    match /app_config/{id} {
+      allow read: if active();
+      allow write: if dev();
+    }
+
+    match /presence/{id} {
+      allow read: if inMyWs();
+      allow create, update: if active() && !dev() && id == request.auth.uid && request.resource.data.ws == ws();
+      allow delete: if dev();
+    }
+
+    match /chat_msgs/{id} {
+      allow read: if inMyWs();
+      allow create: if (dev() || (active() && request.resource.data.ws == ws()))
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.text is string && request.resource.data.text.size() < 2000;
+      allow delete: if dev();
+    }
+
+    match /{document=**} {
+      allow read, write: if dev();
+    }
+  }
+}
