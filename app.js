@@ -75,12 +75,16 @@ async function initLive() {
     resetPassword: e => au.sendPasswordResetEmail(auth, e),
     get: async (col, id) => { const d = await fs.getDoc(fs.doc(db, col, id)); return d.exists() ? { id: d.id, ...d.data() } : null; },   // قراءة مستند واحد (للبوابة)
     listen: (col, ws, cb) => fs.onSnapshot(ws ? fs.query(fs.collection(db, col), fs.where("ws", "==", ws)) : fs.collection(db, col), s => cb(s.docs.map(d => ({ id: d.id, ...d.data() }))), er => console.warn("listen", col, er.code)),
+    bump: (col, id, data) => fs.setDoc(fs.doc(db, col, id), { ...data, count: fs.increment(1), lastAt: Date.now() }, { merge: true }),
     rawAdd: (col, data) => fs.addDoc(fs.collection(db, col), data),
     rawSet: (col, id, data) => fs.setDoc(fs.doc(db, col, id), data, { merge: true }),                                                     // كتابة مباشرة بدون فحص الأدوار
     logout: () => au.signOut(auth),
     onAuth: cb => au.onAuthStateChanged(auth, cb),
-    async list(col) {                      // جلب المجموعة كاملة بدون where/orderBy (لا Composite Index) ثم الفلترة والترتيب في JavaScript
-      const ref = typeof listRef === "function" ? listRef(fs, db, col) : fs.collection(db, col), cache = async () => { try { const c = await fs.getDocsFromCache(ref); return c.empty ? null : c; } catch (e) { return null; } };
+    async list(col) {
+      const refs = [].concat(typeof listRef === "function" ? listRef(fs, db, col) : fs.collection(db, col));   // استعلام لكل موقع مسند
+      if (!refs.length) return [];                                     // مستخدم مقيّد بلا مواقع = قائمة فارغة فوراً
+      const one = async ref => {                      // جلب المجموعة كاملة بدون where/orderBy (لا Composite Index) ثم الفلترة والترتيب في JavaScript
+      const cache = async () => { try { const c = await fs.getDocsFromCache(ref); return c.empty ? null : c; } catch (e) { return null; } };
       let s = null;
       if (!navigator.onLine) s = await cache();                       // أوفلاين: من الكاش فوراً بدون انتظار
       else {
@@ -90,6 +94,10 @@ async function initLive() {
       }
       if (!s) s = await fs.getDocs(ref);                              // لا كاش بعد: ننتظر الخادم
       return s.docs.map(d => ({ id: d.id, ...d.data() }));
+      };
+      const all = (await Promise.all(refs.map(one))).flat();
+      const out = refs.length > 1 ? [...new Map(all.map(d => [d.id, d])).values()] : all;
+      return typeof listFilter === "function" ? listFilter(col, out) : out;
     },
     async save(col, data, id) {            // id موجود = تعديل، بدونه = إضافة (المعرّف يُولَّد محلياً ليعمل أوفلاين)
       const ref = id ? fs.doc(db, col, id) : fs.doc(fs.collection(db, col));
@@ -168,7 +176,7 @@ const catName = c => isStdCat(c) ? CATS[c] : (c || ""); // التصنيف الم
 const statusName = s => s === "active" ? "يعمل" : "في الصيانة";
 const num = n => Number(n || 0).toLocaleString("en-US");
 const fmt = n => Number(Number(n).toFixed(2)).toLocaleString("en-US");
-const money = n => `${num(n)} ${SETTINGS.currency}`;
+const money = n => (typeof canSeeMoney === "function" && !canSeeMoney()) ? "***" : `${num(n)} ${SETTINGS.currency}`;   // إخفاء الأسعار
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const toNum = v => (v === "" || v == null || !Number.isFinite(+v)) ? null : +v;
 const pad = n => String(n).padStart(2, "0");
@@ -317,7 +325,7 @@ const vehicleOptions = extra => `<option value="">اختر المعدة</option>
 async function loadData() {
   [vehicles, expenses] = await Promise.all([S.list("vehicles"), S.list("expenses")]);
   // المجموعات الجديدة: فشل قراءتها (مثلاً قواعد Firestore) لا يعطّل بقية النظام
-  [advances, inventory, operations, usersList, xbiz] = await Promise.all(["advances", "inventory", "operations", "users", "biz"].map(listSafe));   // biz كاملة ثم فلترة kind بـ JavaScript
+  [advances, inventory, operations, usersList, xbiz] = await Promise.all(["advances", "inventory", "operations", "users", "biz"].map(c => c === "users" && typeof ACCESS !== "undefined" && (ACCESS.appRole || ACCESS.uid) ? Promise.resolve([]) : listSafe(c)));   // مجموعة users القديمة مغلقة   // biz كاملة ثم فلترة kind بـ JavaScript
   try { scopeData(); } catch (err) { console.error("scope", err); }   // عزل مساحة العمل
   try { setRole(resolveRole()); } catch (err) { console.error("role", err); }   // الدور أولاً ثم العرض
   const sel = $("#exp-vehicle"), cur = sel.value;
@@ -636,6 +644,8 @@ async function purgeVehicle(v) {
     exps = (await S.list("expenses")).filter(e => e.vehicleId === v.id);
     ops = (await S.list("operations")).filter(o => o.vehicleId === v.id);
   } catch (err) { console.error(err); return alert("تعذر التحقق من مصروفات وسجلات المعدة. حاول مرة أخرى."); }
+  const BK = ["fuelout", "rental", "downtime", "part", "maint"], links = (typeof xbiz !== "undefined" ? xbiz : []).filter(x => BK.includes(x.kind) && x.vehicleId === v.id);
+  if (links.length) return alert(`لا يمكن الحذف النهائي للمعدة ${v.number} لأن لها ${links.length} سجل مرتبط (تفويل/إيجار/أعطال/كاوتش/صيانة). تبقى في الأرشيف.`);
   if (exps.length || ops.length)
     return alert(`لا يمكن الحذف النهائي للمعدة ${v.number} لأن لها ${exps.length} مصروف و${ops.length} سجل تشغيل. تبقى في الأرشيف حفاظاً على تقاريرك.`);
   await removeItem("vehicles", v.id, `حذف المعدة ${v.number} نهائياً؟ لا يمكن التراجع عن ذلك.`);
@@ -777,12 +787,10 @@ function renderModWarn() {
       : e ? `تعذر تحميل بيانات هذه الوحدة (${col}). تأكد من الاتصال ثم حدّث الصفحة.` : "";
   });
 }
-function dbErr(err) {
-  console.error(err);
-  if (err && err.code === "role-denied") return alert(err.message);
-  alert(err && err.code === "permission-denied"
-    ? "لا توجد صلاحية للكتابة في Firestore لهذه الوحدة. أضف قواعد الصلاحيات للمجموعات الجديدة (advances / inventory / operations / costings / materials / auditlog / biz / acct / users) ثم أعد المحاولة."
-    : "حدث خطأ أثناء الحفظ. حاول مرة أخرى.");
+function dbErr(err) {                       // المعالج الوحيد لأخطاء قاعدة البيانات (بلا تفاصيل داخلية)
+  console.error(err); const c = err && err.code;
+  if (c === "role-denied") return alert(err.message);
+  alert(c === "permission-denied" ? "ليست لديك صلاحية لتنفيذ هذا الإجراء." : (c === "unavailable" || !navigator.onLine) ? "تعذر الاتصال بالإنترنت. حاول لاحقاً." : "حدث خطأ غير متوقع. حاول مرة أخرى.");
 }
 const mod = fn => async (...a) => { try { return await fn(...a); } catch (err) { dbErr(err); } };
 const freshDoc = async (col, id) => (await S.list(col)).find(x => x.id === id);   // قراءة حديثة قبل أي تعديل
@@ -1379,11 +1387,12 @@ $("#users-body").addEventListener("click", mod(async ev => {
 }));
 
 /* ---- النسخ الاحتياطي ---- */
-const BK_COLS = { vehicles: "المعدات", expenses: "المصروفات", advances: "العهد", inventory: "المخزن", operations: "التشغيل", costings: "التكلفة", materials: "أسعار المواد", users: "المستخدمون", auditlog: "السجل" };
+const BK_COLS = { vehicles: "المعدات", expenses: "المصروفات", advances: "العهد", inventory: "المخزن", operations: "التشغيل", costings: "التكلفة", materials: "أسعار المواد", auditlog: "السجل" };
+const bkScope = rows => typeof ACCESS === "undefined" || !ACCESS.scope ? rows : rows.filter(r => (r.workspaceId || r.ws || "main") === ACCESS.scope && r.kind !== "user");   // عزل صارم لشركة واحدة
 async function fetchAll() {
   const out = {};
   for (const c of Object.keys(BK_COLS)) {
-    try { out[c] = await S.list(c); } catch (err) { console.error(c, err); out[c] = []; (out._errors ||= []).push(c); }
+    try { out[c] = bkScope(await S.list(c)); } catch (err) { console.error(c, err); out[c] = []; (out._errors ||= []).push(c); }
   }
   return out;
 }
@@ -1392,9 +1401,9 @@ async function backup(kind) {
   const btn = $(`#bk-${kind}`); btn.disabled = true;
   try {
     const all = await fetchAll();
-    if (kind === "json") downloadBlob(`نسخة-احتياطية-ميكسار-${today()}.json`, new Blob([JSON.stringify({ app: "fawzy-fleet", exportedAt: new Date().toISOString(), data: all }, null, 1)], { type: "application/json" }));
+    if (kind === "json") downloadBlob(`نسخة-احتياطية-ميكسار-${today()}.json`, new Blob([JSON.stringify({ app: "mixar-fleet", exportedAt: new Date().toISOString(), data: all }, null, 1)], { type: "application/json" }));
     else xlsxDownload(`نسخة-كاملة-ميكسار-${today()}.xlsx`, Object.entries(BK_COLS).map(([c, n]) => ({ title: n, rows: all[c].map(flatRow).map(r => r) })).map(s => ({ ...s, head: [...new Set(s.rows.flatMap(r => Object.keys(r)))] })));
-    try { localStorage.setItem("fawzy-last-backup", today()); } catch (e) { /* بدون تخزين */ }
+    try { localStorage.setItem("mixar-last-backup", today()); } catch (e) { /* بدون تخزين */ }
     renderStatusNotes();
     if (all._errors) alert(`تنبيه: تعذرت قراءة (${all._errors.join("، ")}) فلم تُضمَّن في النسخة. غالباً تحتاج إضافة قواعد الصلاحيات لها.`);
   } catch (err) { console.error(err); alert("تعذر إنشاء النسخة الاحتياطية."); }
@@ -1407,7 +1416,7 @@ const csvCell = v => { v = v == null ? "" : String(v); return /[",\r\n]/.test(v)
 async function exportCsv() {
   const col = $("#bk-csv-col").value, btn = $("#bk-csv"); btn.disabled = true;
   try {
-    const rows = (await S.list(col)).map(flatRow);
+    const rows = bkScope(await S.list(col)).map(flatRow);
     if (!rows.length) return alert("لا توجد بيانات في هذا الجدول.");
     const head = [...new Set(rows.flatMap(r => Object.keys(r)))];
     const txt = "﻿" + [head.map(csvCell).join(","), ...rows.map(r => head.map(h => csvCell(r[h])).join(","))].join("\r\n");
@@ -1422,12 +1431,12 @@ fillCsvSelect();
 
 
 /* ---- سجل التعديلات: يغلّف S.save / S.remove بعد التهيئة ---- */
-const AUD_COLS = { vehicles: "المعدات", expenses: "المصروفات", advances: "العهد", inventory: "المخزن", operations: "التشغيل", costings: "التكلفة", materials: "أسعار المواد", users: "المستخدمون" };
+const AUD_COLS = { vehicles: "المعدات", expenses: "المصروفات", advances: "العهد", inventory: "المخزن", operations: "التشغيل", costings: "التكلفة", materials: "أسعار المواد", users: "المستخدمون", biz: "العمليات والأسطول", acct: "خزينة المحاسب" };
 const AUD_ACT = { add: "إضافة", edit: "تعديل", delete: "حذف", archive: "أرشفة", restore: "استعادة", settle: "تصفية" };
 let auditNote = "";                                                    // وصف مخصص للعملية التالية (يُستهلك مرة واحدة)
 const FIELD_AR = { amount: "المبلغ", driver: "السائق", date: "التاريخ", notes: "ملاحظات", name: "الاسم", phone: "التليفون", qty: "الكمية", price: "السعر", total: "الإجمالي",
   type: "النوع", desc: "الوصف", cost: "التكلفة", project: "المشروع", priceM3: "سعر م³", priceTrip: "سعر الرحلة", unit: "الوحدة", companyId: "الشركة", vehicleId: "المعدة", vehicleNo: "رقم المعدة",
-  number: "رقم المعدة", hours: "الساعات", status: "الحالة", location: "الموقع", category: "التصنيف", role: "الدور", liters: "اللترات", site: "الموقع", supplier: "المورد", serial: "Serial", rate: "السعر", party: "الطرف", start: "البداية", end: "النهاية", cause: "السبب", basis: "نظام الحساب", dir: "النوع", down: "ساعات التوقف", position: "الموضع", installHours: "عداد التركيب", endHours: "عداد النهاية", installDate: "تاريخ التركيب", endDate: "تاريخ النهاية", ptype: "نوع القطعة", size: "المقاس", equipName: "اسم المعدة", normalLph: "المعدل الطبيعي", hourRate: "تكلفة الساعة", insuranceExpiry: "انتهاء التأمين", calibrationExpiry: "انتهاء المعايرة", licenseExpiry: "انتهاء الرخصة", location: "الموقع الحالي", licNo: "رقم الرخصة", licExp: "انتهاء الرخصة", accountant: "المحاسب", opening: "العهدة المرحّلة", from: "من", to: "إلى" };
+  number: "رقم المعدة", hours: "الساعات", status: "الحالة", location: "الموقع", category: "التصنيف", role: "الدور", liters: "اللترات", site: "الموقع", supplier: "المورد", serial: "Serial", rate: "السعر", party: "الطرف", start: "البداية", end: "النهاية", cause: "السبب", basis: "نظام الحساب", dir: "النوع", down: "ساعات التوقف", position: "الموضع", installHours: "عداد التركيب", endHours: "عداد النهاية", installDate: "تاريخ التركيب", endDate: "تاريخ النهاية", ptype: "نوع القطعة", size: "المقاس", equipName: "اسم المعدة", normalLph: "المعدل الطبيعي", hourRate: "تكلفة الساعة", insuranceExpiry: "انتهاء التأمين", calibrationExpiry: "انتهاء المعايرة", licenseExpiry: "انتهاء الرخصة", licNo: "رقم الرخصة", licExp: "انتهاء الرخصة", accountant: "المحاسب", opening: "العهدة المرحّلة", from: "من", to: "إلى" };
 const BIZ_KIND = { company: "شركة", supply: "توريد", payment: "دفعة", driver: "سائق", maint: "صيانة", fuelin: "وارد سولار", fuelout: "تفويل", rental: "عقد إيجار", rday: "سجل إيجار", downtime: "عطل", part: "كاوتش/بطارية", prod: "إنتاج" };
 const SUP_COLS = ["vehicles", "expenses", "operations"], SUP_VEH_KEYS = ["hours", "hoursDate", "hlog"];
 function roleDeny(msg) { const e = new Error(msg); e.code = "role-denied"; throw e; }
@@ -1467,13 +1476,16 @@ function wrapAudit() {
     }).filter(Boolean).join(" · ");
   };
   const write = async e => {
-    try { await save0("auditlog", { ...e, at: Date.now(), day: today(), user: $("#user-email").textContent || "" }); }
+    const uo = e.uo; delete e.uo;
+    try { await save0("auditlog", { ...e, ws: (typeof ACCESS !== "undefined" && (ACCESS.scope || ACCESS.ws)) || "main", workspaceId: (typeof ACCESS !== "undefined" && (ACCESS.scope || ACCESS.ws)) || "main", uid: (typeof ACCESS !== "undefined" && ACCESS.uid) || "", at: Date.now(), day: today(), user: $("#user-email").textContent || "" }); }
     catch (err) { console.warn("auditlog", err); }
+    if (!uo && typeof auditEvt === "function") auditEvt(e.action, e.col + "/" + e.docId, [e.label, e.detail].filter(Boolean).join(" — "));   // audit_logs: حدث واحد من نفس المغلّف
   };
   S.save = async (col, d, id) => {
     if (col === "auditlog") return save0(col, d, id);
     const note = auditNote; auditNote = "";
-    checkRole("save", col, d, id);
+    checkRole("save", col, d, id); if (typeof guardWrite === "function") guardWrite("save", col, d, id);
+    const uo = typeof userOp === "function" && userOp(col, d);
     const label0 = labelOf(col, id, d);
     let action = id ? "edit" : "add";
     if (col === "vehicles" && d.archived === true) action = "archive";
@@ -1482,11 +1494,11 @@ function wrapAudit() {
     const detail = note || (col === "inventory" && d.log && id ? (() => { const l = d.log[d.log.length - 1] || {}; return `${l.t === "out" ? "صرف" : l.t === "in" ? "إضافة" : ""} ${l.q ?? ""} ${l.note || ""}`.trim(); })()
       : id ? (col === "acct" ? "تعديل في الفترة" : diffOf(col, id, d)) : "");
     const r = await save0(col, d, id);
-    await write({ col, action, docId: id || r, label: label0 || labelOf(col, r, d), detail: String(detail).slice(0, 400) });
+    await write({ col, action, docId: id || r, label: label0 || labelOf(col, r, d), detail: String(detail).slice(0, 400), uo });
     return r;
   };
   S.remove = async (col, id) => {
-    checkRole("remove", col);
+    checkRole("remove", col); if (typeof guardWrite === "function") guardWrite("remove", col);
     const label0 = labelOf(col, id);                                    // اسم العنصر قبل حذفه (شركة/توريد/دفعة/سائق/صيانة/فترة خزينة…)
     await rem0(col, id);
     await write({ col, action: "delete", docId: id, label: label0 || `مستند ${id}`, detail: "" });
@@ -1496,7 +1508,7 @@ function wrapAudit() {
 let auditRows = [];
 async function loadAudit() {
   const warn = $("#au-warn");
-  try { auditRows = (await S.list("auditlog")).sort((a, b) => (b.at || 0) - (a.at || 0)); warn.classList.add("hidden"); }
+  try { auditRows = (await S.list("auditlog")).filter(r => typeof ACCESS === "undefined" || ACCESS.role !== "dev" || (r.ws || r.workspaceId || "main") === ACCESS.scope).sort((a, b) => (b.at || 0) - (a.at || 0)); warn.classList.add("hidden"); }
   catch (err) {
     console.error(err); auditRows = [];
     warn.textContent = err && err.code === "permission-denied" ? "لا توجد صلاحية لمجموعة «auditlog» في Firestore. أضف لها قواعد الصلاحيات ثم حدّث الصفحة." : "تعذر تحميل السجل.";
@@ -1588,7 +1600,8 @@ $("#tr-vehicle").onchange = () => {
   else note.textContent = v ? "لا توجد بيانات وقود كافية لهذه المعدة. أدخل المعدل يدوياً." : "";
 };
 
-async function refreshCostings() { costings = await listSafe("costings"); renderSaved(); }
+const inScope = r => (!ACCESS.scope || (r.workspaceId || "main") === ACCESS.scope) && (typeof restricted !== "function" || !restricted() || ACCESS.sites.includes(r.siteId));   // م8: عزل المطور بين الشركات
+async function refreshCostings() { costings = (await listSafe("costings")).filter(inScope); renderSaved(); }
 const saveCost = type => mod(async () => {
   const nameEl = $(type === "concrete" ? "#cc-name" : "#tr-name"), name = cleanName(nameEl.value);
   if (!name) return alert("اكتب اسماً للسجل قبل الحفظ.");
@@ -1815,7 +1828,7 @@ $("#qs-list").addEventListener("click", async ev => {
 });
 
 /* ---- أسعار المواد المحفوظة ---- */
-async function refreshMats() { matList = await listSafe("materials"); renderMats(); }
+async function refreshMats() { matList = (await listSafe("materials")).filter(inScope); renderMats(); }
 function renderMats() {
   $("#dl-materials").innerHTML = matList.map(m => `<option value="${esc(m.name)}">`).join("");
   $("#mat-warn").classList.toggle("hidden", !modErr.materials);
@@ -1902,7 +1915,7 @@ function renderStatusNotes() {
   $("#meter-age").innerHTML = dates.length
     ? `آخر تحديث للعدادات: ${ageTxt(dates.at(-1))}${stale ? ` · <b class="text-orange-600">${stale} معدة لم تُحدَّث منذ أسبوع</b>` : ""}`
     : `<b class="text-orange-600">لم تُسجَّل قراءات عدادات بعد</b>`;
-  let lb = ""; try { lb = localStorage.getItem("fawzy-last-backup") || ""; } catch (e) { /* بدون تخزين */ }
+  let lb = ""; try { lb = localStorage.getItem("mixar-last-backup") || ""; } catch (e) { /* بدون تخزين */ }
   $("#bk-age").innerHTML = !lb ? '<b class="text-orange-600">لم تُنشأ نسخة احتياطية بعد</b>' : ageOf(lb) >= 30 ? `<b class="text-orange-600">آخر نسخة احتياطية منذ ${ageOf(lb)} يوم</b>` : `آخر نسخة احتياطية: ${ageTxt(lb)}`;
 }
 
@@ -1942,7 +1955,7 @@ const ROLES = { manager: "مدير", accountant: "محاسب", supervisor: "مش
 const ALL_PAGES = ["dashboard", "vehicles", "readings", "expenses", "advances", "inventory", "ops", "reports", "costing", "quick", "audit", "settings", "biz", "acct", "crew", "fuel", "rent", "down", "parts", "prod"];
 const SUP_PAGES = ["readings", "expenses", "ops"];                   // مشرف الموقع: العدادات + الوقود + يومية التشغيل فقط
 let userRole = "manager";
-const roleHidden = () => new Set(userRole === "supervisor" ? ALL_PAGES.filter(p => !SUP_PAGES.includes(p)) : userRole === "accountant" ? ["audit", "settings"] : []);
+const roleHidden = () => new Set(userRole === "supervisor" ? ALL_PAGES.filter(p => !SUP_PAGES.includes(p)) : userRole === "accountant" ? ["settings"] : []);
 const myEmail = () => String($("#user-email").textContent || "").trim().toLowerCase();
 function resolveRole() {
   if (typeof ACCESS !== "undefined" && ACCESS.appRole) return ACCESS.appRole;   // الدور من سجل الحساب (access.js)
@@ -1964,8 +1977,8 @@ function setRole(role) {
   const cur = document.querySelector(".view:not(.hidden)");
   if (!cur || hiddenPages().has(cur.id.replace(/^view-/, ""))) show(homeView());
 }
-const storedHidden = () => { try { return new Set(JSON.parse(localStorage.getItem("fawzy-hidden-pages") || "[]")); } catch (e) { return new Set(); } };
-const hiddenPages = () => { const s = storedHidden(); roleHidden().forEach(p => s.add(p)); return s; };    // إعدادات المتصفح + قيود الدور
+const storedHidden = () => { try { return new Set(JSON.parse(localStorage.getItem("mixar-hidden-pages") || "[]")); } catch (e) { return new Set(); } };
+const hiddenPages = () => { const s = storedHidden(); roleHidden().forEach(p => s.add(p)); if (typeof planHidden === "function") planHidden().forEach(p => s.add(p)); return s; };    // إعدادات المتصفح + قيود الدور
 const homeView = () => ["dashboard", "readings", "expenses", "ops"].find(p => !hiddenPages().has(p)) || "dashboard";
 const pageOff = k => hiddenPages().has(k);
 function applyPages() {
@@ -1985,7 +1998,7 @@ function renderSettings() {
 $("#pg-list").addEventListener("change", ev => {
   const c = ev.target.closest("[data-pg]"); if (!c) return;
   const h = storedHidden(); c.checked ? h.delete(c.dataset.pg) : h.add(c.dataset.pg);
-  try { localStorage.setItem("fawzy-hidden-pages", JSON.stringify([...h])); } catch (e) { alert("تعذر حفظ الإعداد في هذا المتصفح."); }
+  try { localStorage.setItem("mixar-hidden-pages", JSON.stringify([...h])); } catch (e) { alert("تعذر حفظ الإعداد في هذا المتصفح."); }
   applyPages(); try { renderNotifs(); } catch (e) { /* لم تُحمَّل البيانات بعد */ }
 });
 VIEW_HOOKS.settings = renderSettings;
@@ -2658,6 +2671,6 @@ $("#logout").onclick = () => S.logout();
     const ok = !!user && (typeof accessGate !== "function" || await accessGate(user));   // بوابة الاعتماد (access.js)
     $("#login").classList.toggle("hidden", !!user);
     $("#app").classList.toggle("hidden", !ok);
-    if (ok) { $("#user-email").textContent = user.email; show("dashboard"); loadData(); }
+    if (ok) { $("#user-email").textContent = user.email; show("dashboard"); if (typeof bootShield === "function") bootShield(true); Promise.resolve(loadData()).finally(() => { if (typeof bootShield === "function") bootShield(false); }); }
   });
 })();
