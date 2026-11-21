@@ -6,7 +6,7 @@
   "use strict";
 
   // ضع رابط Cloudflare Worker الخاص بك هنا بعد إنشائه:
-  const WORKER_URL = "https://YOUR-WORKER-NAME.YOUR-SUBDOMAIN.workers.dev";
+  const WORKER_URL = "https://mixar-ai.belalbelalmoh.workers.dev";
 
   /* 1. إصلاح الفاصلة العشرية العربية (12،5) ومنع الحروف في حقول الأرقام */
   document.addEventListener("input", ev => {
