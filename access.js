@@ -1,52 +1,101 @@
-/* access.js (v17) — التسجيل الذاتي واعتماد الحسابات | يعتمد على app.js (S, $, esc, smartName, show) */
-const DEV_EMAIL = "belalbelalmoh@gmail.com", ADMIN_EMAIL = "no-admin@invalid";   // المالك فقط؛ لا حساب مدير ثابت في مشروع SaaS
+/* access.js (v28) — التسجيل الذاتي واعتماد الحسابات والمساعد الذكي | يعتمد على app.js */
+const DEV_EMAIL = "belalbelalmoh@gmail.com", ADMIN_EMAIL = "no-admin@invalid";
+const DEFAULT_AI_URL = "https://mixar-ai.belalbelalmoh.workers.dev";
 const ACCESS = { role: "", site: "", appRole: "" };
 const ownerRole = e => { e = String(e || "").toLowerCase(); return e === DEV_EMAIL ? "dev" : e === ADMIN_EMAIL ? "admin" : ""; };
 const ACC_ROLES = { accountant: "محاسب / مهندس موقع", admin: "مدير" };
 const accUsers = () => urs;
 
-/* ---------- شاشة الدخول: تبديل / إنشاء حساب / نسيت كلمة المرور ---------- */
+/* ---------- شاشة الدخول والتسجيل المنظمة (3 تبويبات + رجوع للصفحة التعريفية) ---------- */
 (function injectLoginUI() {
   const btn = $("#login-btn"); if (!btn) return;
-  const inp = (id, ph, t = "text") => `<input id="${id}" type="${t}" placeholder="${ph}" class="inp mb-2" ${t !== "text" ? 'dir="ltr"' : ""}>`;
+  const lbl = (t, h) => `<label class="block text-xs font-bold text-slate-600 mb-1">${t}</label>${h}`;
+  const inp = (id, ph, t = "text") => `<input id="${id}" type="${t}" placeholder="${ph}" class="inp mb-2.5" ${t !== "text" ? 'dir="ltr"' : ""}>`;
+
+  const navTop = document.createElement("div");
+  navTop.className = "mb-4 space-y-3";
+  navTop.innerHTML = `
+    <div class="flex justify-between items-center">
+      <button type="button" id="back-landing" class="text-xs font-bold text-slate-600 hover:text-orange-600 flex items-center gap-1">← العودة للصفحة التعريفية</button>
+      <span class="text-xs font-bold text-slate-400">ميكسار SaaS</span>
+    </div>
+    <div class="grid grid-cols-3 gap-1 bg-slate-100 p-1 rounded-xl text-xs font-extrabold">
+      <button type="button" data-amode="login" class="py-2 rounded-lg bg-white text-slate-900 shadow-sm">تسجيل الدخول</button>
+      <button type="button" data-amode="co" class="py-2 rounded-lg text-slate-600">شركة جديدة</button>
+      <button type="button" data-amode="join" class="py-2 rounded-lg text-slate-600">انضمام بكود</button>
+    </div>`;
+  const firstField = $("#email")?.previousElementSibling?.tagName === "LABEL" ? $("#email").previousElementSibling : $("#email");
+  if (firstField) firstField.before(navTop); else btn.before(navTop);
+
   const reg = document.createElement("div");
-  reg.id = "reg-box"; reg.className = "hidden";
-  reg.innerHTML = `<select id="reg-kind" class="inp mb-2"><option value="co">تسجيل شركة جديدة (تجربة مجانية 30 يوماً)</option><option value="join">الانضمام إلى شركة مسجلة</option></select>
-    <div data-k="co">${inp("reg-co", "اسم الشركة")}<select id="reg-type" class="inp mb-2"><option>خرسانة جاهزة</option><option>خلاطة أسفلت</option><option>معدات ومقاولات</option></select>${inp("reg-phone", "رقم الهاتف", "tel")}</div>
-    <div data-k="join" class="hidden">${inp("reg-code", "كود الشركة (مثال MX-1001)")}${inp("reg-job", "المهنة")}</div>
-    ${inp("reg-name", "الاسم بالكامل")}${inp("reg-email", "البريد الإلكتروني", "email")}<p class="text-xs text-orange-700 mb-2">تنبيه: اكتب أي بريد افتراضي مثل name@gmail.com — لا تكتب بريدك الشخصي الحقيقي أو كلمة مرورك الحقيقية.</p>${inp("reg-pass", "كلمة المرور (6 أحرف على الأقل)", "password")}
-    <button type="button" id="reg-btn" class="btn w-full">إنشاء الحساب</button>`;
+  reg.id = "reg-box"; reg.className = "hidden text-right";
+  reg.innerHTML = `
+    <input type="hidden" id="reg-kind" value="co">
+    <div data-k="co">
+      <div class="bg-orange-50 border border-orange-200 rounded-xl p-2.5 text-xs text-orange-800 mb-3">تجربة مجانية 30 يوماً شاملة جميع المميزات، وسيتم توليد كود شركة خاص بك لإضافة موظفيك.</div>
+      ${lbl("اسم الشركة أو المحطة", inp("reg-co", "مثال: شركة النيل للخرسانة"))}
+      ${lbl("نوع النشاط", `<select id="reg-type" class="inp mb-2.5"><option>خرسانة جاهزة</option><option>خلاطة أسفلت</option><option>معدات ومقاولات</option></select>`)}
+      ${lbl("رقم الهاتف (واتساب)", inp("reg-phone", "01xxxxxxxxx", "tel"))}
+    </div>
+    <div data-k="join" class="hidden">
+      <div class="bg-blue-50 border border-blue-200 rounded-xl p-2.5 text-xs text-blue-800 mb-3">أدخل كود الشركة الذي حصلت عليه من مديرك (يبدأ بـ MX-) ليصل طلبك للاعتماد.</div>
+      ${lbl("كود الشركة", inp("reg-code", "MX-1001"))}
+      ${lbl("المسمى الوظيفي", inp("reg-job", "مثال: محاسب / مشرف موقع"))}
+    </div>
+    ${lbl("الاسم بالكامل", inp("reg-name", "الاسم الثلاثي"))}
+    ${lbl("البريد الإلكتروني", inp("reg-email", "name@example.com", "email"))}
+    ${lbl("كلمة المرور (6 أحرف على الأقل)", `<div class="relative mb-2.5"><input id="reg-pass" type="password" dir="ltr" placeholder="••••••••" class="inp !mb-0 pl-10"><button type="button" id="toggle-rpass" class="absolute left-2.5 top-2.5 text-slate-400 text-sm">👁️</button></div>`)}
+    <button type="button" id="reg-btn" class="btn w-full mt-1">إنشاء الشركة وبدء التجربة</button>`;
   btn.before(reg);
+
   const links = document.createElement("div");
-  links.className = "mt-3 flex justify-between text-sm font-bold text-orange-600";
-  links.innerHTML = `<button type="button" id="to-reg">إنشاء حساب جديد</button><button type="button" id="to-forgot">نسيت كلمة المرور؟</button>`;
+  links.id = "login-links";
+  links.className = "mt-3 flex justify-center text-xs font-bold text-orange-600";
+  links.innerHTML = `<button type="button" id="to-forgot">نسيت كلمة المرور؟</button>`;
   btn.after(links);
-  let mode = "login";
-  const setMode = m => {
-    mode = m;
-    $("#reg-box").classList.toggle("hidden", m !== "reg");
-    ["#email", "#password", "#login-btn"].forEach(s => { const el = $(s); (el.previousElementSibling && el.tagName === "INPUT" ? [el.previousElementSibling, el] : [el]).forEach(x => x.classList.toggle("hidden", m === "reg")); });
-    $("#to-reg").textContent = m === "reg" ? "لدي حساب — تسجيل الدخول" : "إنشاء حساب جديد";
-    $("#login-error").classList.add("hidden");
+
+  $("#back-landing").onclick = () => { if (typeof window.showLanding === "function") window.showLanding(); };
+  $("#toggle-rpass").onclick = () => { const p = $("#reg-pass"); p.type = p.type === "password" ? "text" : "password"; };
+
+  window.setAuthMode = m => {
+    const isReg = m === "co" || m === "join";
+    navTop.querySelectorAll("[data-amode]").forEach(b => {
+      const active = b.dataset.amode === m;
+      b.className = active ? "py-2 rounded-lg bg-white text-slate-900 shadow-sm" : "py-2 rounded-lg text-slate-600";
+    });
+    $("#reg-box").classList.toggle("hidden", !isReg);
+    $("#login-links").classList.toggle("hidden", isReg);
+    ["#email", "#password", "#login-btn"].forEach(s => {
+      const el = $(s); if (!el) return;
+      (el.previousElementSibling && el.previousElementSibling.tagName === "LABEL" ? [el.previousElementSibling, el] : [el]).forEach(x => x.classList.toggle("hidden", isReg));
+    });
+    if (isReg) {
+      $("#reg-kind").value = m;
+      document.querySelectorAll("[data-k]").forEach(d => d.classList.toggle("hidden", d.dataset.k !== m));
+      $("#reg-btn").textContent = m === "co" ? "إنشاء الشركة وبدء التجربة (30 يوم)" : "إرسال طلب الانضمام للشركة";
+    }
+    $("#login-error")?.classList.add("hidden");
   };
-  const fail = m => { const e = $("#login-error"); e.textContent = m; e.classList.remove("hidden"); };
-  $("#to-reg").onclick = () => setMode(mode === "reg" ? "login" : "reg");
+
+  navTop.querySelectorAll("[data-amode]").forEach(b => b.onclick = () => window.setAuthMode(b.dataset.amode));
+
+  const fail = m => { const e = $("#login-error"); if (e) { e.textContent = m; e.classList.remove("hidden"); } else alert(m); };
   $("#to-forgot").onclick = async () => {
-    const who = (prompt("اكتب اسمك أو بريدك الافتراضي ليصل طلبك للمطور:") || "").trim(); if (!who) return;
+    const who = (prompt("اكتب اسمك أو بريدك الإلكتروني ليصل طلب استعادة الدخول للمطور:") || "").trim(); if (!who) return;
     if (!S.rawAdd) return fail("متاح مع Firebase فقط.");
     try { await S.rawAdd("password_requests", { who: who.slice(0, 90), device: deviceInfo().slice(0, 180), at: Date.now(), status: "open" }); alert("تم إرسال طلبك للمطور."); }
     catch (ex) { fail("تعذر إرسال الطلب (" + (ex.code || "") + ")"); }
   };
-  $("#reg-kind").onchange = () => document.querySelectorAll("[data-k]").forEach(d => d.classList.toggle("hidden", d.dataset.k !== $("#reg-kind").value));
+
   $("#reg-btn").onclick = async () => {
     const b = $("#reg-btn"), v = id => (($("#" + id) || {}).value || "").trim(), kind = v("reg-kind");
     const name = v("reg-name"), email = v("reg-email"), pass = $("#reg-pass").value, co = v("reg-co"), phone = v("reg-phone"), code = v("reg-code").toUpperCase(), job = v("reg-job");
-    if (!name || !email || pass.length < 6 || (kind === "co" ? !co || !phone : !code || !job)) return fail("أكمل كل الحقول (كلمة المرور 6 أحرف على الأقل).");
+    if (!name || !email || pass.length < 6 || (kind === "co" ? !co || !phone : !code || !job)) return fail("أكمل كل الحقول المطلوبة (كلمة المرور 6 أحرف على الأقل).");
     if (!S.register) return fail("إنشاء الحساب يعمل مع Firebase فقط.");
     b.disabled = true;
     try {
       let target = null;
-      if (kind === "join") { target = await S.get("codes", code); if (!target) { b.disabled = false; return fail("كود الشركة غير صحيح."); } }
+      if (kind === "join") { target = await S.get("codes", code); if (!target) { b.disabled = false; return fail("كود الشركة غير صحيح، تأكد منه من مدير الشركة."); } }
       const u = await S.register(email, pass), uid = u.user.uid, base = { kind: "user", name, email: email.toLowerCase(), phone, device: deviceInfo(), createdAt: Date.now() };
       if (kind === "co") {
         const c = "MX-" + (1000 + Math.floor(Math.random() * 9000));
@@ -55,7 +104,7 @@ const accUsers = () => urs;
         await S.rawSet("biz", uid, { ...base, job: "مدير الشركة", role: "admin", status: "active", ws: uid, wsName: co, perms: { ...DEFAULT_PERMS, isWorkspaceAdmin: true } });
       } else await S.rawSet("biz", uid, { ...base, job, role: "accountant", status: "pending", ws: target.ws, perms: { ...DEFAULT_PERMS, isWorkspaceAdmin: false } });
       location.reload();
-    } catch (ex) { fail(ex.code === "auth/email-already-in-use" ? "هذا البريد مسجّل بالفعل." : "تعذر إنشاء الحساب (" + (ex.code || "") + ")"); }
+    } catch (ex) { fail(ex.code === "auth/email-already-in-use" ? "هذا البريد مسجّل بالفعل — انتقل لتبويب تسجيل الدخول." : "تعذر إنشاء الحساب (" + (ex.code || "") + ")"); }
     b.disabled = false;
   };
 })();
@@ -70,18 +119,19 @@ function applyRec(user, rec, own) {
   ACCESS.scope = ACCESS.role === "dev" ? (localStorage.getItem("mixar-scope") || "main") : ACCESS.ws;
   try { localStorage.setItem(CK, JSON.stringify({ uid: user.uid, own, rec: { role: ACCESS.role, ws: ACCESS.ws, perms: ACCESS.perms, site: ACCESS.site, sites: ACCESS.sites, pages: ACCESS.pages, template: ACCESS.tpl, name: ACCESS.name, status: "active" } })); } catch (e) {}
   applyPermUI();
+  loadAi();
 }
 async function accessGate(user) {
   $("#pending")?.remove();
-  if (!S.get) return true;                                              // الوضع التجريبي بدون Firebase
+  if (!S.get) return true;
   const own = ownerRole(user.email); let c = null;
   try { c = JSON.parse(localStorage.getItem(CK)); } catch (e) {}
   if (c && c.uid !== user.uid) c = null;
-  if (!navigator.onLine && c) { applyRec(user, c.rec, c.own); return true; }   // أوفلاين: الصلاحيات المحفوظة فوراً
+  if (!navigator.onLine && c) { applyRec(user, c.rec, c.own); return true; }
   let rec = null, ok = false;
   try { rec = await S.get("biz", user.uid); ok = true; } catch (e) { console.warn("gate", e && e.code); }
   if (!ok && c) { applyRec(user, c.rec, c.own); return true; }
-  if (own) {                                                             // مطور / مدير ثابتان: تفعيل تلقائي
+  if (own) {
     const all = Object.fromEntries(Object.keys(DEFAULT_PERMS).map(k => [k, true]));
     if (ok && (!rec || rec.status !== "active" || rec.role !== own || rec.ws !== "owner"))
       try { await S.rawSet("biz", user.uid, { kind: "user", name: rec?.name || (own === "dev" ? "المطور" : "المدير"), email: user.email.toLowerCase(), role: own, status: "active", ws: "owner", perms: all }); } catch (e) { console.warn(e); }
@@ -96,29 +146,29 @@ async function accessGate(user) {
     <button id="pd-refresh" class="btn w-full">تحديث الحالة</button><button id="pd-out" class="w-full py-2.5 rounded-xl bg-slate-200 font-bold">تسجيل الخروج</button></div>`;
   document.body.appendChild(el);
   $("#pd-refresh").onclick = () => location.reload();
-  $("#pd-out").onclick = async () => { try { localStorage.removeItem(CK); } catch (e) {} await S.logout(); el.remove(); };
+  $("#pd-out").onclick = async () => { try { localStorage.removeItem(CK); } catch (e) {} await S.logout(); el.remove(); if (typeof window.showLanding === "function") window.showLanding(); };
   return false;
 }
 
 /* ---------- مساحات العمل: ختم السجلات + عزل القراءة ---------- */
 const WS_COLS = ["vehicles", "expenses", "advances", "inventory", "operations", "costings", "materials", "acct", "biz"];
-function listRef(fs, db, col) {                                          // غير المطور: يقرأ مساحته فقط (where بحقل واحد = بدون Composite Index)
-  if (col === "biz@users") return fs.query(fs.collection(db, "biz"), fs.where("kind", "==", "user"), fs.where("ws", "==", ACCESS.ws), fs.where("status", "in", ["pending", "active", "suspended"]));   // المدير: لا يرى المطور ولا الموقوفين
+function listRef(fs, db, col) {
+  if (col === "biz@users") return fs.query(fs.collection(db, "biz"), fs.where("kind", "==", "user"), fs.where("ws", "==", ACCESS.ws), fs.where("status", "in", ["pending", "active", "suspended"]));
   if (col === "audit_logs" && ACCESS.role !== "dev") return fs.query(fs.collection(db, col), fs.where("ws", "==", ACCESS.ws));
   const r = fs.collection(db, col);
-  return ACCESS.role && ACCESS.role !== "dev" && WS_COLS.includes(col) ? (restricted() ? (ACCESS.sites.length ? ACCESS.sites : []).slice(0, 5).map(s => fs.query(r, fs.where("workspaceId", "==", ACCESS.ws), fs.where("siteId", "==", s))) : fs.query(r, fs.where("workspaceId", "==", ACCESS.ws))) : r;   // موقع = استعلام مساوٍ يمكن إثباته في القواعد
+  return ACCESS.role && ACCESS.role !== "dev" && WS_COLS.includes(col) ? (restricted() ? (ACCESS.sites.length ? ACCESS.sites : []).slice(0, 5).map(s => fs.query(r, fs.where("workspaceId", "==", ACCESS.ws), fs.where("siteId", "==", s))) : fs.query(r, fs.where("workspaceId", "==", ACCESS.ws))) : r;
 }
 function stampNew(col, d) {
   return ["users", "auditlog", "audit_logs", "password_requests", "dev_logs", "chat_msgs", "presence", "app_config"].includes(col) ? d : { workspaceId: ACCESS.scope || "main", createdBy: ACCESS.email || "", ...d, ...siteStamp() };
 }
-function scopeData() {                                                   // عزل العرض (app.js)
+function scopeData() {
   if (!ACCESS.scope) return;
   const ok = r => (r.workspaceId || "main") === ACCESS.scope && (!restricted() || ACCESS.sites.includes(r.siteId));
   vehicles = vehicles.filter(ok); expenses = expenses.filter(ok); advances = advances.filter(ok);
   inventory = inventory.filter(ok); operations = operations.filter(ok);
-  xbiz = xbiz.filter(x => x.kind !== "user" && ok(x));                  // سولار/إيجارات/أعطال/كاوتش/إنتاج
+  xbiz = xbiz.filter(x => x.kind !== "user" && ok(x));
 }
-async function scopeExt() {                                              // عزل biz و acct (ext.js) + تحميل الحسابات
+async function scopeExt() {
   const ok = r => (r.workspaceId || "main") === ACCESS.scope && (!restricted() || ACCESS.sites.includes(r.siteId));
   urs = isDev() ? biz.filter(x => x.kind === "user") : [];
   biz = biz.filter(x => x.kind !== "user" && ok(x)); acct = acct.filter(ok);
@@ -136,7 +186,7 @@ const deviceInfo = () => {
   return `${os}${((u.match(/Android[^;]*;\s*([^)]+)\)/) || [])[1] || "").trim().replace(/^/, " ")} · ${br}`.replace("  ", " ");
 };
 
-/* ---------- صفحة إدارة الحسابات والصلاحيات (المطور فقط) ---------- */
+/* ---------- صفحة إدارة الحسابات والصلاحيات ---------- */
 const PERM_LABELS = { canAddEquipment: "إضافة معدات", canEditDeleteEquipment: "تعديل/حذف المعدات", canAddTransactions: "تسجيل مصروفات وساعات", canEditDeleteTransactions: "تعديل/حذف الحركات", canManageCustody: "إدارة العُهد", canExportPrint: "تصدير وطباعة", isWorkspaceAdmin: "إدارة مساحة العمل", viewFinancials: "رؤية الأسعار والمبالغ", canApprove: "اعتماد العمليات" };
 const TABS = { audit: "سجل التدقيق", plat: "المنصة والشركات", rn: "طلبات التجديد", su: "طلبات الاشتراك", req: "طلبات الاعتماد", forgot: "استعادة الدخول", acc: "الحسابات والصلاحيات", dev: "لوحة المطور" };
 let accTab = (() => { try { return localStorage.getItem("mixar-acctab") || "plat"; } catch (e) { return "plat"; } })(), accData = { pr: [], logs: [] };
@@ -212,7 +262,7 @@ async function accClick(ev) {
     if (a === "promote") await S.save("biz", { role: "admin", perms: { ...(u.perms || DEFAULT_PERMS), isWorkspaceAdmin: true } }, id);
     if (a === "prsave" || a === "discstart" || a === "discstop") {
       const cur = { ...readPricing() }, now = Date.now(), pr0 = accData.pricing || PRICING;
-      if (a === "prsave") { cur.discountStartedAt = pr0.discountStartedAt || 0; cur.discountEndsAt = pr0.discountEndsAt || 0; }   // لا يُلغى الخصم النشط
+      if (a === "prsave") { cur.discountStartedAt = pr0.discountStartedAt || 0; cur.discountEndsAt = pr0.discountEndsAt || 0; }
       if (a === "discstart") { cur.discountStartedAt = now; cur.discountEndsAt = now + cur.discountDays * 864e5; }
       if (a === "discstop") { delete cur.plans; delete cur.discountDays; cur.discountEndsAt = 0; }
       await S.rawSet("app_config", "pricing", cur); pricingCache = null;
@@ -235,7 +285,7 @@ async function accClick(ev) {
     }
     if (a === "rnok") {
       const r = (accData.rn || []).find(x => x.id === id), days = { month: 30, quarter: 90, year: 365 }[r && r.plan];
-      let c = r && companies.find(x => x.id === r.ws); if (r && !c) c = await S.get("companies", r.ws).catch(() => null);   // شركة جديدة لم تُحمَّل بعد
+      let c = r && companies.find(x => x.id === r.ws); if (r && !c) c = await S.get("companies", r.ws).catch(() => null);
       if (!r || !c || !days) { b.disabled = false; return alert("تعذر العثور على الشركة أو الباقة لهذا الطلب."); }
       await S.rawSet("companies", r.ws, { expiresAt: Math.max(toMs(c.expiresAt), Date.now()) + days * 864e5, plan: r.plan, status: "active" });
       await S.rawSet("renewal_requests", id, { status: "approved", decidedAt: Date.now() }); auditEvt("renewal_approved", r.ws, `${c.name || r.company} — ${r.plan} (+${days} يوم)`);
@@ -261,7 +311,7 @@ async function accClick(ev) {
     if (a === "cancel" && confirm("إلغاء هذا الحساب؟ لن تُحذف أي بيانات سجّلها.")) await S.save("biz", { status: "cancelled" }, id);
     if (a === "suok") await S.rawSet("signup_requests", id, { status: "contacted" });
     if (a === "sudel") await S.remove("signup_requests", id);
-    if (a === "aisave") { const u = $("#ai-url").value.trim(); if (u && !/^https:\/\//.test(u)) { b.disabled = false; return alert("الرابط يجب أن يبدأ بـ https://"); } await S.rawSet("app_config", "ai_proxy", { url: u }); await loadAi(); }
+    if (a === "aisave") { const u = $("#ai-url").value.trim(); if (u && !/^https:\/\//.test(u)) { b.disabled = false; return alert("الرابط يجب أن يبدأ بـ https://"); } await S.rawSet("app_config", "ai_proxy", { url: u }); await loadAi(); alert("تم حفظ رابط المساعد الذكي."); }
     if (a === "pmadd" || a === "pmdel") {
       const p0 = accData.pricing || PRICING; let l = (p0.promoList || []).filter(x => x.code !== (a === "pmdel" ? id : $("#pm-code").value.trim().toUpperCase()));
       if (a === "pmadd") { const code = $("#pm-code").value.trim().toUpperCase(), pct = Math.min(90, +$("#pm-pct").value || 0); if (!/^[A-Z0-9]{3,20}$/.test(code) || pct <= 0) { b.disabled = false; return alert("اكتب كوداً (حروف/أرقام إنجليزية) ونسبة صحيحة."); } l.push({ code, pct }); }
@@ -296,10 +346,10 @@ async function accChange(ev) {
   if (sc) {
     const uid = sc.dataset.siteChk, boxes = [...document.querySelectorAll(`[data-site-chk="${uid}"]`)];
     let v;
-    if (sc.value === "*" && sc.checked) v = ["*"];                          // اختيار «كل المواقع» يلغي بقية المربعات
+    if (sc.value === "*" && sc.checked) v = ["*"];
     else {
       const sites = boxes.filter(x => x.checked).map(x => x.value).filter(x => x !== "*");
-      if (!sites.length) v = ["*"];                                        // إلغاء كل المواقع = عودة إلى «كل المواقع»
+      if (!sites.length) v = ["*"];
       else { if (sites.length > 5) alert("الحد الأقصى 5 مواقع لكل مستخدم."); v = sites.slice(0, 5); }
     }
     try { await S.save("biz", { assignedSites: v }, uid); auditEvt("assigned_sites", uid, v.join(",")); await loadData(); } catch (e) { dbErr(e); }
@@ -316,7 +366,7 @@ async function accChange(ev) {
   } catch (e) { dbErr(e); c.checked = !c.checked; }
 }
 
-/* ---------- حالات الحسابات + الحضور (Presence) + الشات الفوري (Cloudinary) ---------- */
+/* ---------- حالات الحسابات + الحضور + الشات الفوري ---------- */
 const STAT = { active: "✅ تم القبول (نشط)", suspended: "⏸️ موقوف مؤقتاً", disabled: "⏸️ موقوف مؤقتاً", cancelled: "🚫 حساب ملغي", pending: "⏳ قيد الانتظار" };
 const chatWs = () => ACCESS.role === "dev" ? ACCESS.scope : ACCESS.ws;
 let chatMsgs = [], cl = null, unsubs = [], beating = false;
@@ -324,7 +374,7 @@ const ago = t => { const m = Math.floor((Date.now() - t) / 60000); return m < 1 
 const online = p => p && Date.now() - p.at < 100000;
 const presTxt = id => { const p = presAll[id]; return !p ? "لم يدخل بعد" : online(p) ? "متصل الآن 🟢" : "آخر ظهور " + ago(p.at); };
 
-(function permCss() {                                                    // إخفاء الأزرار غير المصرح بها
+(function permCss() {
   const s = document.createElement("style");
   s.textContent = `.np-eadd #vehicle-form,.np-eed #v-list [data-edit],.np-eed #v-list [data-del],
 .np-tadd :is([data-oil],#arch-form,#pt-end-form,#expense-form,#ops-form,#inv-form,#mat-form,#fout-form,#fin-form,#dn-form,#dr-form,#rc-form,#rd-form,#rl-form,#sp-form,#mt-form,#mv-form,#oil-form,#pay-form,#pd-form,#pt-form,#ac-form,#co-form),
@@ -345,11 +395,11 @@ function initChat() {
   unsubs.forEach(f => f && f()); unsubs = [];
   unsubs.push(S.listen("chat_msgs", chatWs(), rows => { chatMsgs = rows.sort((a, b) => a.at - b.at).slice(-200); paintChat(); }));
   unsubs.push(S.listen("presence", isDev() ? null : chatWs(), rows => { presAll = Object.fromEntries(rows.map(r => [r.id, r])); paintChat(); if (isDev() && accTab === "acc" && !$("#view-accounts").classList.contains("hidden")) renderAccounts(); }));
-  if (!isDev() && !beating) {                                            // المطور لا يكتب حضوراً أبداً (وضع الشبح)
+  if (!isDev() && !beating) {
     beating = true;
     const hb = () => { if (!document.hidden) S.rawSet("presence", ACCESS.uid, { ws: ACCESS.ws, name: ACCESS.name || ACCESS.email, at: Date.now() }).catch(() => {}); };
     hb(); setInterval(hb, 45000);
-    setInterval(async () => { try { const r = await S.get("biz", ACCESS.uid); if (r && r.status !== "active") location.reload(); } catch (e) {} }, 60000);   // الإيقاف يسري فوراً على الجلسة
+    setInterval(async () => { try { const r = await S.get("biz", ACCESS.uid); if (r && r.status !== "active") location.reload(); } catch (e) {} }, 60000);
     document.addEventListener("visibilitychange", hb);
   }
   buildChat();
@@ -357,16 +407,17 @@ function initChat() {
 const markSeen = () => { try { localStorage.setItem("mixar-seen-" + chatWs(), Date.now()); } catch (e) {} };
 
 function buildChat() {
-  if ($("#chat-fab")) return paintChat();
+  if ($("#chat-fab")) { $("#chat-fab").classList.remove("hidden"); return paintChat(); }
   const f = document.createElement("button"), p = document.createElement("div");
-  f.id = "chat-fab"; f.className = "fixed bottom-4 left-4 z-40 w-14 h-14 rounded-full bg-amber-500 text-slate-900 text-2xl shadow-lg no-print";
+  f.id = "chat-fab"; f.title = "شات الشركة"; f.className = "fixed bottom-4 left-4 z-40 w-14 h-14 rounded-full bg-amber-500 text-slate-900 text-2xl shadow-lg no-print";
   f.innerHTML = `<i class="fa-solid fa-comments"></i><span id="chat-badge" class="hidden absolute -top-1 -right-1 bg-red-600 text-white text-xs rounded-full px-1.5">0</span>`;
   p.id = "chat-panel"; p.className = "hidden fixed bottom-20 left-4 z-40 w-[22rem] max-w-[calc(100vw-2rem)] h-[28rem] max-h-[70vh] bg-white rounded-2xl shadow-2xl border flex flex-col no-print";
-  p.innerHTML = `<div class="p-3 border-b"><div class="font-extrabold">شات مساحة العمل</div><div id="chat-mem" class="text-xs text-slate-500"></div><div class="text-[10px] text-slate-400">للإدارة الفنية صلاحية الاطلاع على المحادثات لأغراض الدعم.</div></div>
+  p.innerHTML = `<div class="p-3 border-b flex justify-between items-start"><div><div class="font-extrabold">شات مساحة العمل</div><div id="chat-mem" class="text-xs text-slate-500"></div></div><button id="chat-x" class="text-slate-400 font-bold px-1">✕</button></div>
     <div id="chat-list" class="flex-1 overflow-y-auto p-3 space-y-2 text-sm"></div>
     <div class="p-2 border-t flex gap-2 items-center"><label class="cursor-pointer text-xl px-1"><i class="fa-solid fa-paperclip"></i><input id="chat-file" type="file" accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx" class="hidden"></label><input id="chat-in" class="inp !py-1.5" placeholder="اكتب رسالة..."><button id="chat-mic" class="text-xl px-1" title="رسالة صوتية">🎤</button><button id="chat-send" class="btn !px-3 !py-1.5">إرسال</button></div>`;
   document.body.append(f, p);
-  f.onclick = () => { p.classList.toggle("hidden"); markSeen(); paintChat(); };
+  f.onclick = () => { $("#ai-panel")?.classList.add("hidden"); p.classList.toggle("hidden"); markSeen(); paintChat(); };
+  $("#chat-x").onclick = () => p.classList.add("hidden");
   $("#chat-send").onclick = () => sendChat(); $("#chat-mic").onclick = toggleRec;
   $("#chat-in").onkeydown = e => { if (e.key === "Enter") sendChat(); };
   $("#chat-file").onchange = e => { if (e.target.files[0]) sendChat(e.target.files[0]); e.target.value = ""; };
@@ -414,15 +465,15 @@ async function sendChat(file, voice) {
 const PAY_NO = "01128079357";
 let companies = [], myCo = null;
 const toMs = x => typeof x === "number" && isFinite(x) ? x : (x && x.toMillis ? x.toMillis() : Number(x) || 0);
-const GRACE = 259200000;   // فترة سماح 72 ساعة
-const expMs = d => Date.now() + Math.max(1, Math.floor(+d || 0)) * 864e5;   // مدة اشتراك رقمية صالحة دائماً
+const GRACE = 259200000;
+const expMs = d => Date.now() + Math.max(1, Math.floor(+d || 0)) * 864e5;
 const dayLeft = c => c ? Math.ceil((toMs(c.expiresAt) - Date.now()) / 864e5) : 0;
 const locked = () => !!ACCESS.locked;
 async function loadCo() {
   myCo = null; ACCESS.locked = false;
   if (isDev() || !S.get || !ACCESS.ws) return;
   try { myCo = await S.get("companies", ACCESS.ws); } catch (e) { return; }
-  ACCESS.locked = !!myCo && (myCo.status !== "active" || toMs(myCo.expiresAt) + GRACE < Date.now());   // قراءة فقط بعد انتهاء فترة السماح   // شركة بلا مستند اشتراك = حساب قديم يعمل كالمعتاد
+  ACCESS.locked = !!myCo && (myCo.status !== "active" || toMs(myCo.expiresAt) + GRACE < Date.now());
 }
 function renderSub() {
   let b = $("#sub-badge");
@@ -433,7 +484,7 @@ function renderSub() {
   b.className = "text-xs font-bold px-2 py-1 rounded-lg border " + (off ? "bg-red-50 text-red-700 border-red-300" : d <= 7 ? "bg-amber-50 text-amber-800 border-amber-300" : "bg-green-50 text-green-700 border-green-300");
 }
 
-/* ---------- الأسعار والخصومات (app_config/pricing) ---------- */
+/* ---------- الأسعار والخصومات ---------- */
 const PRICING = { plans: { month: { base: 250, disc: 100 }, quarter: { base: 650, disc: 300 }, year: { base: 2400, disc: 600 } }, discountDays: 90, discountStartedAt: 0, discountEndsAt: 0 };
 const discOn = p => (p.discountEndsAt || 0) > Date.now();
 let pricingCache = null;
@@ -460,7 +511,7 @@ async function openPlans() {
   const L = [["month", "الباقة الشهرية", "30 يوماً"], ["quarter", "الباقة ربع السنوية", "90 يوماً"], ["year", "الباقة السنوية", "365 يوماً"]];
   const wa = (t, price) => `https://wa.me/201128079357?text=` + encodeURIComponent(`مرحباً، أرغب في الاشتراك/التجديد في ميكسار\nالشركة: ${co.name || ""}\nكود الشركة: ${co.code || ""}\nالباقة: ${t} (${price} ج.م)`);
   const o = document.createElement("div"); o.className = "fixed inset-0 z-[80] bg-black/60 grid place-items-center p-4";
-  o.innerHTML = `<div class="bg-white rounded-2xl p-5 max-w-md w-full space-y-3 max-h-[90vh] overflow-y-auto"><div class="flex justify-between items-start"><img src="logo-badge.png" alt="Mixar" class="h-16 object-contain" onerror="this.remove()"><button data-x>✕</button></div><h3 class="font-extrabold text-lg">الاشتراك والتجديد</h3>${stale ? `<div class="text-xs bg-red-50 text-red-700 rounded p-2">تعذر تحديث الأسعار الآن (تحقق من الاتصال)؛ قد تكون الأسعار المعروضة غير محدثة — أكّد السعر عبر واتساب.</div>` : ""}
+  o.innerHTML = `<div class="bg-white rounded-2xl p-5 max-w-md w-full space-y-3 max-h-[90vh] overflow-y-auto"><div class="flex justify-between items-start"><img src="logo-badge.png" alt="Mixar" class="h-16 object-contain" onerror="this.remove()"><button data-x>✕</button></div><h3 class="font-extrabold text-lg">الاشتراك والتجديد</h3>${stale ? `<div class="text-xs bg-red-50 text-red-700 rounded p-2">تعذر تحديث الأسعار الآن؛ أكّد السعر عبر واتساب.</div>` : ""}
     <div class="border rounded-xl p-3"><b>تجربة مجانية</b><div class="text-sm text-slate-600">30 يوماً مجاناً بالكامل عند تسجيل شركة جديدة.</div></div>` +
     L.map(([k, t, d]) => { const pl = p.plans[k], price = on ? pl.disc : pl.base; return `<div class="border rounded-xl p-3"><b>${t}</b> <span class="text-sm text-slate-500">${d}</span>
       <div class="mt-1">${on ? `<s class="text-slate-400">${pl.base}</s> <b class="text-green-700 text-lg">${pl.disc} ج.م</b> <span class="text-xs bg-orange-100 text-orange-800 rounded px-2 py-0.5">ينتهي العرض بعد ${left} يوم</span>` : `<b class="text-lg">${pl.base} ج.م</b>`}</div>
@@ -470,8 +521,8 @@ async function openPlans() {
   document.body.appendChild(o);
 }
 
-/* ---------- الباقات والسعات + قفل الجلسة الواحدة ---------- */
-const APP_VERSION = "v27";
+/* ---------- الباقات والسعات + الجلسة الواحدة ---------- */
+const APP_VERSION = "v28";
 const ACC_MODS = ["dashboard", "vehicles", "expenses", "advances", "inventory", "rent", "acct", "reports", "costing", "audit", "settings", "accounts"];
 const PLAN_DEFS = {
   accountant_solo: { label: "محاسب فردي", maxUsers: 1, maxSites: 1, modules: ACC_MODS },
@@ -484,7 +535,7 @@ const PLAN_DEFS = {
 };
 const planInfo = c => { const d = PLAN_DEFS[(c || {}).planType] || PLAN_DEFS.company_growth; return { label: d.label, maxUsers: (c || {}).maxUsers ?? d.maxUsers, maxSites: (c || {}).maxSites ?? d.maxSites, modules: (c && c.enabledModules && c.enabledModules.length) ? c.enabledModules : d.modules }; };
 const curCo = () => isDev() ? companies.find(x => x.id === ACCESS.scope) : myCo;
-function planHidden() {                                                  // الواجهة الديناميكية: صفحات خارج الباقة لا تُرسم
+function planHidden() {
   const m = isDev() ? "all" : planInfo(myCo).modules, out = [];
   if (ACCESS.pages && !isDev() && !isAdm()) ALL_PAGES.forEach(p => { if (!ACCESS.pages.includes(p) && !["dashboard", "settings", "accounts"].includes(p)) out.push(p); });
   if (m !== "all") ALL_PAGES.forEach(p => { if (!m.includes(p) && !["dashboard", "settings", "accounts"].includes(p)) out.push(p); });
@@ -503,21 +554,21 @@ function planCard() {
   return `<div class="border rounded-xl p-3 mb-3 text-sm ${warn}"><b>${esc(p.label)}</b> · المستخدمون: ${used} / ${p.maxUsers} · المواقع: حتى ${p.maxSites}${used >= p.maxUsers ? " — وصلت للحد الأقصى، رقّ الباقة" : ""}</div>`;
 }
 
-/* ---------- صائد الأخطاء الصامت (system_errors) ---------- */
+/* ---------- صائد الأخطاء الصامت ---------- */
 const ERR = { sent: 0, seen: {} };
 const fp = s => { let h = 0; for (const c of s) h = (h * 31 + c.charCodeAt(0)) | 0; return (h >>> 0).toString(36); };
 async function reportErr(msg, file, line, stack) {
   try {
     if (!S || !S.bump || !ACCESS.uid) return;
     const id = (ACCESS.ws || "x") + "_" + fp(`${APP_VERSION}|${msg}|${file}|${line}`);
-    if (ERR.seen[id] || ERR.sent >= 5) return; ERR.seen[id] = 1; ERR.sent++;   // بصمة واحدة = مستند واحد بعدّاد، وبحد أقصى 5 في الجلسة
+    if (ERR.seen[id] || ERR.sent >= 5) return; ERR.seen[id] = 1; ERR.sent++;
     await S.bump("system_errors", id, { msg: String(msg).slice(0, 300), file: String(file || "").split("/").pop().slice(0, 80), line: line || 0, stack: String(stack || "").slice(0, 1500), version: APP_VERSION, ws: ACCESS.ws || "", lastUser: ACCESS.email || "", lastDevice: deviceInfo().slice(0, 120) });
   } catch (e) {}
 }
 window.addEventListener("error", e => reportErr(e.message, e.filename, e.lineno, e.error && e.error.stack));
 window.addEventListener("unhandledrejection", e => { const r = e.reason || {}; reportErr(r.message || String(r), "promise", 0, r.stack); });
 
-/* ---------- قوالب الأدوار التسعة + المواقع + إخفاء الأسعار + سجل التدقيق ---------- */
+/* ---------- قوالب الأدوار + المواقع + سجل التدقيق ---------- */
 const P = (...on) => ({ canAddEquipment: false, canEditDeleteEquipment: false, canAddTransactions: false, canEditDeleteTransactions: false, canManageCustody: false, canExportPrint: false, isWorkspaceAdmin: false, viewFinancials: false, canApprove: false, ...Object.fromEntries(on.map(k => [k, true])) });
 const ROLE_TPL = {
   general_manager: { label: "مدير عام / مدير مساحة", perms: P("canAddEquipment", "canEditDeleteEquipment", "canAddTransactions", "canEditDeleteTransactions", "canManageCustody", "canExportPrint", "isWorkspaceAdmin", "viewFinancials", "canApprove"), pages: null },
@@ -533,7 +584,7 @@ const ROLE_TPL = {
 const canSeeMoney = () => isDev() || isAdm() || !!(ACCESS.perms || {}).isWorkspaceAdmin || (ACCESS.perms || {}).viewFinancials !== false;
 const restricted = () => !isDev() && !isAdm() && Array.isArray(ACCESS.sites) && !ACCESS.sites.includes("*");
 const siteStamp = () => restricted() && ACCESS.sites[0] ? { siteId: ACCESS.sites[0] } : {};
-function bootShield(on) {                                                // لا وميض لبيانات غير مفلترة قبل اكتمال الصلاحيات
+function bootShield(on) {
   let s = $("#boot-shield");
   if (!s) { s = document.createElement("div"); s.id = "boot-shield"; s.className = "fixed inset-0 z-[90] bg-white grid place-items-center font-bold text-slate-500"; s.textContent = "جارٍ تجهيز بياناتك…"; document.body.appendChild(s); }
   s.classList.toggle("hidden", !on);
@@ -544,7 +595,6 @@ function auditEvt(type, target, summary) {
 }
 document.addEventListener("click", ev => { if (ev.target.closest("#export-btn")) auditEvt("export", "reports", "تصدير تقرير"); }, true);
 
-/* ---------- مواقع الشركة + تدقيق تلقائي + تنبيهات + مؤشرات + تجديد + نسخ احتياطي (v25) ---------- */
 const coId = () => isDev() ? (companies.some(x => x.id === ACCESS.scope) ? ACCESS.scope : "") : ACCESS.ws;
 const curWs = () => isDev() ? ACCESS.scope : ACCESS.ws;
 let rnList = [];
@@ -559,17 +609,17 @@ function tplControls(u) {
   return `<div class="flex flex-wrap gap-2 mt-2 items-center text-sm"><select data-tpl="${esc(u.id)}" class="inp !py-1 !w-auto"><option value="">قالب الدور…</option>${Object.entries(ROLE_TPL).map(([k, t]) => `<option value="${k}" ${u.template === k ? "selected" : ""}>${t.label}</option>`).join("")}</select>
     <label><input type="checkbox" data-site-chk="${esc(u.id)}" value="*" ${mine.includes("*") ? "checked" : ""} class="ml-1">كل المواقع</label>${all.map(n => `<label><input type="checkbox" data-site-chk="${esc(u.id)}" value="${esc(n)}" ${mine.includes(n) ? "checked" : ""} class="ml-1">${esc(n)}</label>`).join("")}</div>`;
 }
-const userOp = (col, d) => !!d && (d.kind === "user" || d.perms || d.template || d.assignedSites || (col === "biz" && (["active", "suspended", "cancelled"].includes(d.status) || d.role || d.ws)));   // عمليات الحسابات تُسجَّل كـ user_action
+const userOp = (col, d) => !!d && (d.kind === "user" || d.perms || d.template || d.assignedSites || (col === "biz" && (["active", "suspended", "cancelled"].includes(d.status) || d.role || d.ws)));
 const findRec = (col, id) => {
   const pool = { vehicles, expenses, advances, operations, inventory, costings: typeof costings !== "undefined" ? costings : [], materials: typeof matList !== "undefined" ? matList : [], biz: [...(typeof xbiz !== "undefined" ? xbiz : []), ...(typeof biz !== "undefined" ? biz : [])], acct: typeof acct !== "undefined" ? acct : [] };
   return (pool[col] || []).find(x => x.id === id);
 };
-function hookAudit() {                                                   // كل إضافة/تعديل/حذف في الوحدات تُسجَّل في audit_logs
+function hookAudit() {
   if (!S || S._aud) return; S._aud = true;
   const AUD = ["vehicles", "expenses", "advances", "inventory", "operations", "biz", "acct", "costings", "materials"], s0 = S.save.bind(S), r0 = S.remove.bind(S);
   const brief = d => [d.number || d.name || d.title || d.vehicleNo || d.category || "", d.amount != null ? "مبلغ " + d.amount : "", d.note || d.notes || ""].filter(Boolean).join(" · ").slice(0, 200);
   S.save = async (col, d, id) => { const r = await s0(col, d, id); if (AUD.includes(col) && !userOp(col, d)) auditEvt(id ? "edit" : "create", col + "/" + (id || r), brief(d || {})); return r; };
-  S.remove = async (col, id) => { const lbl = brief(findRec(col, id) || {}) || id; const r = await r0(col, id); if (AUD.includes(col)) auditEvt("delete", col + "/" + id, lbl); return r; };   // اسم العنصر المقروء بدل الـ ID
+  S.remove = async (col, id) => { const lbl = brief(findRec(col, id) || {}) || id; const r = await r0(col, id); if (AUD.includes(col)) auditEvt("delete", col + "/" + id, lbl); return r; };
 }
 const alRows = () => { const q = (accData.q || "").trim(), f = accData.f ? dayStart(accData.f) : 0, t = accData.to ? dayEnd(accData.to) : 0;
   return (accData.al || []).filter(r => (!q || JSON.stringify(r).includes(q)) && (!accData.t || r.type === accData.t) && (!accData.u || r.name === accData.u) && (!accData.s || r.siteId === accData.s) && (!f || r.at >= f) && (!t || r.at <= t)); };
@@ -632,16 +682,16 @@ async function restoreBackup(file) {
 }
 function injectBackup() {
   if ($("#bk-card") || !canPage()) return;
-  const old = $("#bk-json"), oc = old && old.closest(".card"); if (oc) oc.classList.add("hidden");   // بطاقة النسخ الاحتياطي القديمة
+  const old = $("#bk-json"), oc = old && old.closest(".card"); if (oc) oc.classList.add("hidden");
   const c = document.createElement("div"); c.id = "bk-card"; c.className = "card space-y-2 mb-3";
   c.innerHTML = `<h3 class="font-extrabold">النسخ الاحتياطي</h3><div class="flex flex-wrap gap-2"><button id="bk-exp" class="btn">تصدير نسخة احتياطية (JSON)</button><label class="btn cursor-pointer">استعادة من نسخة احتياطية<input id="bk-file" type="file" accept="application/json" class="hidden"></label></div>`;
   $("#view-settings").prepend(c); $("#bk-exp").onclick = exportBackup; $("#bk-file").onchange = e => { if (e.target.files[0]) restoreBackup(e.target.files[0]); e.target.value = ""; };
 }
 
-/* ---------- رسائل صوتية + تهيئة سريعة + أدوات إدخال + نطاق التكاليف والمواد (v26) ---------- */
+/* ---------- رسائل صوتية + تهيئة سريعة + أدوات إدخال ---------- */
 const inScope = r => (r.workspaceId || "main") === ACCESS.scope && (!restricted() || ACCESS.sites.includes(r.siteId));
 let rec = null;
-async function toggleRec() {                                             // تسجيل حتى 40 ثانية بمعدل بت منخفض، يُحفظ داخل مستند الرسالة
+async function toggleRec() {
   const btn = $("#chat-mic"); if (rec) return rec.stop();
   try {
     const st = await navigator.mediaDevices.getUserMedia({ audio: true }), mt = ["audio/webm;codecs=opus", "audio/mp4"].find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t));
@@ -667,30 +717,37 @@ function renderOnboard() {
 document.addEventListener("input", e => {
   const t = e.target;
   if (t.tagName === "INPUT" && (t.type === "tel" || t.inputMode === "numeric" || t.inputMode === "decimal") && /[٠-٩۰-۹]/.test(t.value)) t.value = t.value.replace(/[٠-٩]/g, d => d.charCodeAt(0) - 1632).replace(/[۰-۹]/g, d => d.charCodeAt(0) - 1776).replace(/[٫،]/g, ".");
-  if (t.id === "reg-pass") {                                             // مؤشر قوة كلمة المرور
+  if (t.id === "reg-pass") {
     const v = t.value; let s = 0; if (v.length >= 8) s++; if (/[A-Za-z]/.test(v) && /\d/.test(v)) s++; if (/[^A-Za-z0-9]/.test(v) || v.length >= 12) s++;
-    let m = $("#pw-meter"); if (!m) { m = document.createElement("div"); m.id = "pw-meter"; m.className = "text-xs mb-2"; t.after(m); }
+    let m = $("#pw-meter"); if (!m) { m = document.createElement("div"); m.id = "pw-meter"; m.className = "text-xs mb-2"; t.parentElement.after(m); }
     m.textContent = ["ضعيفة جداً", "ضعيفة", "جيدة", "قوية"][s]; m.style.color = ["#dc2626", "#ea580c", "#ca8a04", "#16a34a"][s];
   }
 });
 
-/* ---------- مساعد ميكسار الذكي (عبر Cloudflare Worker) + طلبات الاشتراك + أكواد الخصم + أرقام عربية (v27) ---------- */
-let aiUrl = "";
-const aiCard = () => `<div class="border rounded-xl p-3 mb-3 space-y-2"><div class="font-bold">مساعد ميكسار الذكي (رابط الـ Worker)</div><div class="flex gap-2"><input id="ai-url" class="inp" dir="ltr" placeholder="https://xxxx.workers.dev" value="${esc((accData.ai || {}).url || "")}"><button data-a="aisave" class="btn">حفظ</button></div><div class="text-xs text-slate-500">بدون رابط يختفي زر المساعد عند الجميع. المفتاح محفوظ في الـ Worker فقط.</div></div>`;
+/* ---------- مساعد ميكسار الذكي (عبر Cloudflare Worker) ---------- */
+let aiUrl = DEFAULT_AI_URL;
+const aiCard = () => `<div class="border rounded-xl p-3 mb-3 space-y-2"><div class="font-bold">مساعد ميكسار الذكي (رابط الـ Worker)</div><div class="flex gap-2"><input id="ai-url" class="inp" dir="ltr" placeholder="https://xxxx.workers.dev" value="${esc((accData.ai || {}).url || DEFAULT_AI_URL)}"><button data-a="aisave" class="btn">حفظ</button></div><div class="text-xs text-slate-500">المفتاح محفوظ في الـ Worker فقط.</div></div>`;
 function promoBlock(p) {
   const l = p.promoList || [];
   return `<div class="flex flex-wrap gap-2 items-center text-sm"><b>أكواد الخصم:</b>${l.map(x => `<span class="bg-slate-100 rounded-lg px-2 py-1">${esc(x.code)} — ${x.pct}% <button data-a="pmdel" data-id="${esc(x.code)}" class="text-red-600 font-bold">✕</button></span>`).join("") || "<span class='text-slate-500'>لا أكواد</span>"}<input id="pm-code" class="inp !w-28" placeholder="RAMY10"><input id="pm-pct" type="number" class="inp !w-20" placeholder="%"><button data-a="pmadd" class="btn">إضافة</button></div>`;
 }
 async function loadAi() {
-  aiUrl = ""; if (S.get) { try { const d = await S.get("app_config", "ai_proxy"); aiUrl = d && /^https:\/\//.test(d.url || "") ? d.url : ""; } catch (e) {} }
+  aiUrl = DEFAULT_AI_URL;
+  if (S.get) { try { const d = await S.get("app_config", "ai_proxy"); if (d && /^https:\/\//.test(d.url || "")) aiUrl = d.url.trim(); } catch (e) {} }
+  if (!ACCESS.uid) return;
   let f = $("#ai-fab");
   if (!f) {
-    f = document.createElement("button"); f.id = "ai-fab"; f.className = "fixed bottom-4 left-20 z-40 w-14 h-14 rounded-full text-white text-2xl shadow-lg no-print"; f.style.background = "#1e3a5f"; f.textContent = "✨";
+    f = document.createElement("button"); f.id = "ai-fab"; f.title = "مساعد ميكسار الذكي"; f.className = "fixed bottom-4 left-20 z-40 w-14 h-14 rounded-full text-white text-2xl shadow-lg no-print grid place-items-center"; f.style.background = "#1e3a5f"; f.textContent = "✨";
     const p = document.createElement("div"); p.id = "ai-panel"; p.className = "hidden fixed bottom-20 left-4 z-40 w-[22rem] max-w-[calc(100vw-2rem)] bg-white rounded-2xl shadow-2xl border p-3 space-y-2 no-print";
-    p.innerHTML = `<div class="font-extrabold">مساعد ميكسار الذكي</div><div id="ai-out" class="text-sm whitespace-pre-wrap max-h-64 overflow-y-auto bg-slate-50 rounded-xl p-2 min-h-[4rem]">اسألني عن معداتك أو أرقام شركتك.</div><div class="flex gap-2"><input id="ai-in" class="inp !py-1.5" placeholder="اكتب سؤالك..."><button id="ai-go" class="btn !px-3 !py-1.5">اسأل</button></div>`;
-    document.body.append(f, p); f.onclick = () => p.classList.toggle("hidden"); $("#ai-go").onclick = askAi; $("#ai-in").onkeydown = e => { if (e.key === "Enter") askAi(); };
+    p.innerHTML = `<div class="flex justify-between items-center"><div class="font-extrabold">مساعد ميكسار الذكي ✨</div><button id="ai-x" class="text-slate-400 font-bold px-1">✕</button></div><div id="ai-out" class="text-sm whitespace-pre-wrap max-h-64 overflow-y-auto bg-slate-50 rounded-xl p-2 min-h-[4rem]">اسألني عن معداتك أو أرقام شركتك.</div><div class="flex gap-2"><input id="ai-in" class="inp !py-1.5" placeholder="اكتب سؤالك..."><button id="ai-go" class="btn !px-3 !py-1.5">اسأل</button></div>`;
+    document.body.append(f, p);
+    f.onclick = () => { $("#chat-panel")?.classList.add("hidden"); p.classList.toggle("hidden"); };
+    $("#ai-x").onclick = () => p.classList.add("hidden");
+    $("#ai-go").onclick = askAi;
+    $("#ai-in").onkeydown = e => { if (e.key === "Enter") askAi(); };
   }
-  f.classList.toggle("hidden", !aiUrl); if (!aiUrl) $("#ai-panel").classList.add("hidden");
+  f.classList.toggle("hidden", !aiUrl);
+  if (!aiUrl) $("#ai-panel").classList.add("hidden");
 }
 async function askAi() {
   const q = $("#ai-in").value.trim().slice(0, 800), out = $("#ai-out"); if (!q || askAi.busy) return; askAi.busy = true; out.textContent = "جارٍ التحليل…";
@@ -700,7 +757,7 @@ async function askAi() {
     if (canSeeMoney()) ctx.expensesTotal = expenses.reduce((s, e) => s + (+e.amount || 0), 0);
     const t = await S.idToken(), r = await fetch(aiUrl, { method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + t }, body: JSON.stringify({ question: q, context: ctx }) });
     const j = await r.json(); out.textContent = j.answer || j.error || "لا توجد إجابة.";
-  } catch (e) { out.textContent = "تعذر الاتصال بالمساعد حالياً."; }
+  } catch (e) { out.textContent = "تعذر الاتصال بالمساعد حالياً (" + (e.message || "خطأ شبكة") + ")."; }
   askAi.busy = false;
 }
 function graceBar() {
@@ -709,7 +766,7 @@ function graceBar() {
   if (!b) { b = document.createElement("div"); b.id = "grace-bar"; b.className = "bg-orange-500 text-white text-sm font-bold p-2 text-center"; $("header").after(b); }
   b.textContent = `انتهى اشتراكك — أنت في فترة سماح 72 ساعة (متبقٍ ${Math.max(0, Math.ceil((toMs(myCo.expiresAt) + GRACE - Date.now()) / 36e5))} ساعة) قبل تحويل الحساب إلى قراءة فقط`;
 }
-async function startSession() {                                          // مقعد واحد: الجديد يُمنع إن كانت جلسة أخرى نشطة، أو يطرد القديمة بقرار المستخدم
+async function startSession() {
   if (isDev() || !S.listen || !myCo || planInfo(myCo).maxUsers !== 1 || startSession.done) return; startSession.done = true;
   ACCESS.sid = Math.random().toString(36).slice(2) + Date.now().toString(36);
   let cur = null; try { cur = await S.get("sessions", ACCESS.uid); } catch (e) {}
@@ -726,7 +783,7 @@ async function startSession() {                                          // مق
   }
   begin();
 }
-(function numFix() {                                                     // حقول الأرقام: نص بلوحة عشرية ليقبل الأرقام العربية ثم تُحوَّل تلقائياً
+(function numFix() {
   const fix = r => (r.querySelectorAll ? r.querySelectorAll('input[type="number"]') : []).forEach(i => { i.type = "text"; i.inputMode = "decimal"; });
   fix(document); new MutationObserver(ms => ms.forEach(m => m.addedNodes.forEach(n => n.nodeType === 1 && (n.matches && n.matches('input[type="number"]') ? (n.type = "text", n.inputMode = "decimal") : fix(n))))).observe(document.body, { childList: true, subtree: true });
 })();
