@@ -2661,7 +2661,7 @@ $("#logout").onclick = () => S.logout();
   $("#demo-note").classList.toggle("hidden", LIVE);
   resetExpenseForm(); resetAdvForm(); resetInvForm(); resetOpsForm();
   S.onAuth(async user => {
-    if (user && typeof hideLanding === "function") hideLanding();           // الواجهة التعريفية للزوار فقط
+    if (typeof hideLanding === "function" && typeof showLanding === "function") (user ? hideLanding : showLanding)();           // الواجهة التعريفية للزوار فقط
     const ok = !!user && (typeof accessGate !== "function" || await accessGate(user));   // بوابة الاعتماد (access.js)
     $("#login").classList.toggle("hidden", !!user);
     $("#app").classList.toggle("hidden", !ok);

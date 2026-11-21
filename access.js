@@ -1,4 +1,4 @@
-/* access.js (v28) — التسجيل الذاتي واعتماد الحسابات والمساعد الذكي | يعتمد على app.js */
+/* access.js (v30) — التسجيل الذاتي واعتماد الحسابات والمساعد الذكي | يعتمد على app.js */
 const DEV_EMAIL = "belalbelalmoh@gmail.com", ADMIN_EMAIL = "no-admin@invalid";
 const DEFAULT_AI_URL = "https://mixar-ai.belalbelalmoh.workers.dev";
 const ACCESS = { role: "", site: "", appRole: "" };
@@ -137,7 +137,7 @@ async function accessGate(user) {
       try { await S.rawSet("biz", user.uid, { kind: "user", name: rec?.name || (own === "dev" ? "المطور" : "المدير"), email: user.email.toLowerCase(), role: own, status: "active", ws: "owner", perms: all }); } catch (e) { console.warn(e); }
     applyRec(user, { perms: all }, own); return true;
   }
-  if (rec && rec.status === "active") { applyRec(user, rec); return true; }
+  if (rec && rec.status === "active") { if (await maintBlocked()) return false; applyRec(user, rec); return true; }
   try { localStorage.removeItem(CK); } catch (e) {}
   const st = rec && rec.status, off = st === "disabled" || st === "suspended", can = st === "cancelled", el = document.createElement("section");
   el.id = "pending"; el.className = "fixed inset-0 z-50 grid place-items-center bg-slate-900 p-4";
@@ -174,7 +174,7 @@ async function scopeExt() {
   biz = biz.filter(x => x.kind !== "user" && ok(x)); acct = acct.filter(ok);
   if (ACCESS.role === "admin") urs = await listSafe("biz@users");
   if (isDev()) companies = await listSafe("companies"); else await loadCo();
-  applyPermUI(); renderAccess(); renderSub(); initChat(); applyPlan(); startSession(); hookAudit(); if (isDev()) rnList = await listSafe("renewal_requests"); renderBell(); injectBackup(); renderOnboard(); loadAi();
+  applyPermUI(); renderAccess(); renderSub(); initChat(); applyPlan(); startSession(); hookAudit(); if (isDev()) rnList = await listSafe("renewal_requests"); renderBell(); injectBackup(); renderOnboard(); loadAi(); buildBnav(); buildHub(); inspectBar(); renderBroadcast();
 }
 const isDev = () => ACCESS.role === "dev", isAdm = () => ACCESS.role === "admin", canPage = () => isDev() || isAdm();
 let urs = [], presAll = {};
@@ -245,7 +245,7 @@ async function renderAccounts() {
       (fx ? "" : tplControls(u) + `<div class="grid sm:grid-cols-2 gap-1 mt-2 text-sm">${Object.entries(PERM_LABELS).map(([k, l]) => `<label><input type="checkbox" data-perm="${k}" data-id="${esc(u.id)}" ${p[k] ? "checked" : ""} class="ml-2">${l}</label>`).join("")}</div><div class="mt-2">${u.role === "admin" && !isDev() ? "" : u.status === "active" ? btn("susp", u.id, "توقيف مؤقت", "text-orange-700") + btn("cancel", u.id, "إلغاء الحساب", "text-red-600") : btn("react", u.id, "إعادة تفعيل", "text-green-700") + (u.status === "cancelled" ? "" : btn("cancel", u.id, "إلغاء الحساب", "text-red-600"))}${isDev() ? btn("unlink", u.id, "فك الارتباط", "text-slate-600") + (u.role !== "admin" ? btn("promote", u.id, "ترقية لمدير شركة", "text-blue-700") : "") : ""}</div>`) + `</div>`; }).join("") +
       `</div><div class="mt-3 flex flex-wrap gap-2 items-end ${isDev() ? "" : "hidden"}"><input id="lk-name" class="inp !w-auto" placeholder="اسم المجموعة (مثال: موقع أبو رواش)"><button data-a="link" class="btn">ربط المحدَّدين في مساحة مشتركة</button></div>`;
   }
-  if (accTab === "dev") body = aiCard() + `<div class="border rounded-xl p-3 mb-3 space-y-2"><div class="font-bold">إعدادات رفع الميديا (Cloudinary)</div><div class="grid sm:grid-cols-2 gap-2"><input id="cl-cloud" class="inp" placeholder="Cloud Name" dir="ltr" value="${esc(accData.cl?.cloud || "")}"><input id="cl-preset" class="inp" placeholder="Upload Preset (Unsigned)" dir="ltr" value="${esc(accData.cl?.preset || "")}"></div><button data-a="clsave" class="btn">حفظ</button></div><div class="flex gap-2 flex-wrap mb-3"><button data-a="cache" class="btn">تحديث الكاش إجبارياً</button><button data-a="stamp" class="btn">ختم البيانات السابقة بالنطاق الرئيسي</button></div><table class="w-full text-sm text-right">${th(["الوقت", "المستخدم", "الصفحة", "الجهاز", "الخطأ"])}<tbody>` +
+  if (accTab === "dev") body = aiCard() + toolsCard() + `<div class="border rounded-xl p-3 mb-3 space-y-2"><div class="font-bold">إعدادات رفع الميديا (Cloudinary)</div><div class="grid sm:grid-cols-2 gap-2"><input id="cl-cloud" class="inp" placeholder="Cloud Name" dir="ltr" value="${esc(accData.cl?.cloud || "")}"><input id="cl-preset" class="inp" placeholder="Upload Preset (Unsigned)" dir="ltr" value="${esc(accData.cl?.preset || "")}"></div><button data-a="clsave" class="btn">حفظ</button></div><div class="flex gap-2 flex-wrap mb-3"><button data-a="cache" class="btn">تحديث الكاش إجبارياً</button><button data-a="stamp" class="btn">ختم البيانات السابقة بالنطاق الرئيسي</button></div><table class="w-full text-sm text-right">${th(["الوقت", "المستخدم", "الصفحة", "الجهاز", "الخطأ"])}<tbody>` +
     accData.logs.map(l => `<tr class="border-b text-xs"><td class="py-1">${dt(l.lastAt)}</td><td dir="ltr">${esc(l.lastUser || l.user || "")}</td><td>${esc((l.file || "") + ":" + (l.line || ""))}</td><td>${esc(l.lastDevice || l.device || "")}</td><td>${esc(l.msg)} ×${l.count || 1}</td></tr>`).join("") + `</tbody></table>`;
   v.innerHTML = `<h2 class="text-xl font-extrabold">إدارة الحسابات والصلاحيات</h2><div class="flex gap-2 flex-wrap">${Object.entries(TABS).filter(([k]) => isDev() || ["req", "acc", "audit"].includes(k)).map(([k, l]) => `<button data-tab="${k}" class="px-3 py-1.5 rounded-xl text-sm font-bold ${k === accTab ? "bg-amber-500 text-slate-900" : "bg-slate-200"}">${l}</button>`).join("")}</div><div class="card overflow-x-auto">${body}</div>`;
 }
@@ -317,6 +317,10 @@ async function accClick(ev) {
       if (a === "pmadd") { const code = $("#pm-code").value.trim().toUpperCase(), pct = Math.min(90, +$("#pm-pct").value || 0); if (!/^[A-Z0-9]{3,20}$/.test(code) || pct <= 0) { b.disabled = false; return alert("اكتب كوداً (حروف/أرقام إنجليزية) ونسبة صحيحة."); } l.push({ code, pct }); }
       await S.rawSet("app_config", "pricing", { promoList: l }); pricingCache = null; accData.pricing = await getPricing(true);
     }
+    if (a === "mton" || a === "mtoff") await S.rawSet("app_config", "maintenance", { on: a === "mton", msg: $("#mt-msg").value.trim().slice(0, 200) });
+    if (a === "bcsend") { const tx = $("#bc-text").value.trim().slice(0, 250); if (tx) await S.rawSet("app_config", "broadcast", { text: tx, target: $("#bc-to").value, at: Date.now() }); }
+    if (a === "bcclear") await S.rawSet("app_config", "broadcast", { text: "", at: Date.now() });
+    if (a === "rawget") { let o = null; try { o = await S.get($("#raw-col").value.trim(), $("#raw-id").value.trim()); } catch (e) { o = { error: e.code || "denied" }; } $("#raw-out").textContent = o ? JSON.stringify(o, null, 2) : "غير موجود"; b.disabled = false; return; }
     if (a === "clsave") { await S.rawSet("app_config", "cloudinary", { cloud: $("#cl-cloud").value.trim(), preset: $("#cl-preset").value.trim() }); cl = null; alert("تم حفظ إعدادات Cloudinary."); }
     if (a === "unlink") await S.save("biz", { ws: id, wsName: "" }, id);
     if (a === "done") { await S.remove("password_requests", id); accData.pr = accData.pr.filter(r => r.id !== id); }
@@ -522,7 +526,7 @@ async function openPlans() {
 }
 
 /* ---------- الباقات والسعات + الجلسة الواحدة ---------- */
-const APP_VERSION = "v28";
+const APP_VERSION = "v30";
 const ACC_MODS = ["dashboard", "vehicles", "expenses", "advances", "inventory", "rent", "acct", "reports", "costing", "audit", "settings", "accounts"];
 const PLAN_DEFS = {
   accountant_solo: { label: "محاسب فردي", maxUsers: 1, maxSites: 1, modules: ACC_MODS },
@@ -643,7 +647,7 @@ function renderBell() {
 }
 function kpiCards() {
   const c = companies, live = x => x.status === "active" && dayLeft(x) > 0;
-  const k = [["إجمالي الشركات", c.length], ["نشطة (مدفوعة)", c.filter(x => live(x) && x.plan !== "trial").length], ["تجريبية", c.filter(x => live(x) && x.plan === "trial").length], ["منتهية / موقوفة", c.filter(x => !live(x)).length], ["تنتهي خلال 7 أيام", c.filter(x => live(x) && dayLeft(x) <= 7).length], ["المعدات (المنصة)", (accData.vs || []).length], ["المستخدمون النشطون", accUsers().filter(u => u.status === "active").length]];
+  const k = [["إجمالي الشركات", c.length], ["نشطة (مدفوعة)", c.filter(x => live(x) && x.plan !== "trial").length], ["تجريبية", c.filter(x => live(x) && x.plan === "trial").length], ["منتهية / موقوفة", c.filter(x => !live(x)).length], ["تنتهي خلال 7 أيام", c.filter(x => live(x) && dayLeft(x) <= 7).length], ["المعدات (المنصة)", (accData.vs || []).length], ["المستخدمون النشطون", accUsers().filter(u => u.status === "active").length], ["MRR تقريبي (ج.م)", mrr()], ["ARR تقريبي (ج.م)", mrr() * 12]];
   return `<div class="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4">${k.map(([l, v]) => `<div class="border rounded-xl p-3 text-center"><div class="text-2xl font-extrabold">${v}</div><div class="text-xs text-slate-500">${l}</div></div>`).join("")}</div>`;
 }
 function renewalForm() {
@@ -776,7 +780,7 @@ async function startSession() {
     S.listen("sessions", ACCESS.ws, rows => { const m = rows.find(r => r.id === ACCESS.uid); if (m && m.sid !== ACCESS.sid) { alert("تم الدخول بهذا الحساب من جهاز آخر، وسيتم إنهاء هذه الجلسة."); S.logout().then(() => location.reload()); } });
   };
   if (cur && cur.sid && Date.now() - toMs(cur.at) < 180000) {
-    const o = document.createElement("div"); o.className = "fixed inset-0 z-[95] bg-white grid place-items-center p-4"; o.dir = "rtl";
+    const o = document.createElement("div"); o.className = "fixed inset-0 z-[95] bg-white grid place-items-center p-4"; o.dataset.lock = 1; o.dir = "rtl";
     o.innerHTML = `<div class="max-w-sm w-full text-center space-y-3"><div class="text-4xl">🔒</div><h2 class="font-extrabold text-lg">هذا الحساب مفتوح حالياً على جهاز آخر</h2><p class="text-sm text-slate-600">${esc(cur.device || "جهاز غير معروف")}</p><button data-take class="btn w-full">إنهاء الجلسة القديمة والدخول من هذا الجهاز</button><button data-out class="w-full py-2.5 rounded-xl bg-slate-200 font-bold">تسجيل الخروج</button></div>`;
     o.querySelector("[data-take]").onclick = () => { o.remove(); begin(); }; o.querySelector("[data-out]").onclick = async () => { await S.logout(); location.reload(); };
     return document.body.appendChild(o);
@@ -787,3 +791,113 @@ async function startSession() {
   const fix = r => (r.querySelectorAll ? r.querySelectorAll('input[type="number"]') : []).forEach(i => { i.type = "text"; i.inputMode = "decimal"; });
   fix(document); new MutationObserver(ms => ms.forEach(m => m.addedNodes.forEach(n => n.nodeType === 1 && (n.matches && n.matches('input[type="number"]') ? (n.type = "text", n.inputMode = "decimal") : fix(n))))).observe(document.body, { childList: true, subtree: true });
 })();
+
+/* ---------- واجهة v30: تصميم موحّد + تنقل سفلي + المزيد + زر الرجوع + مركز تواصل + معاينة المطور + الصيانة والبث ---------- */
+(function css() {
+  const s = document.createElement("style");
+  s.textContent = `body{background:#f8fafc}header{background:#1e3a5f!important;color:#fff!important}header .text-slate-900,header .text-slate-500,header .text-slate-700{color:#fff!important}
+#chat-fab,#ai-fab{display:none!important}#hub-fab{position:fixed;left:16px;bottom:16px;z-index:41;width:56px;height:56px;border-radius:50%;background:#e85d04;color:#fff;font-size:24px;box-shadow:0 6px 18px rgba(0,0,0,.25)}
+#hub-menu{position:fixed;left:16px;bottom:82px;z-index:41;background:#fff;border-radius:16px;box-shadow:0 8px 24px rgba(0,0,0,.2);padding:6px;display:flex;flex-direction:column;gap:4px}#hub-menu.hidden{display:none}#hub-menu button{padding:10px 14px;text-align:right;font-weight:700;border-radius:10px;color:#1e3a5f}#hub-menu button:hover{background:#f1f5f9}
+#app.hidden~#hub-fab,#app.hidden~#hub-menu,#app.hidden~#bnav,#app.hidden~#more-sheet,#app.hidden~#chat-panel,#app.hidden~#ai-panel{display:none!important}
+#insp-bar,#bcast{position:sticky;top:3.5rem;z-index:25;display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 12px;font-size:13px;font-weight:700;color:#fff}#insp-bar{background:#e85d04}#bcast{background:#1e3a5f}#insp-bar button,#bcast button{background:rgba(255,255,255,.2);border-radius:8px;padding:2px 10px}
+#bnav{display:none;position:fixed;bottom:0;right:0;left:0;z-index:40;height:64px;background:#fff;border-top:1px solid #e2e8f0;box-shadow:0 -4px 16px rgba(0,0,0,.08)}#bnav button{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#64748b;position:relative;z-index:1}#bnav button span{font-size:20px;line-height:1}#bnav button.on{color:#e85d04}
+#bnav-ind{position:absolute;top:0;height:3px;border-radius:0 0 4px 4px;background:#e85d04;width:calc(100% / var(--n));right:calc(var(--i) * 100% / var(--n));transition:right .25s ease}
+#more-sheet{position:fixed;inset:0;z-index:60;visibility:hidden}#more-sheet.open{visibility:visible}#more-sheet [data-bg]{position:absolute;inset:0;background:rgba(0,0,0,.4);opacity:0;transition:opacity .25s}#more-sheet.open [data-bg]{opacity:1}
+#more-sheet [data-box]{position:absolute;bottom:0;right:0;left:0;max-height:75vh;overflow-y:auto;background:#fff;border-radius:20px 20px 0 0;padding:16px 16px 84px;transform:translateY(100%);transition:transform .28s ease}#more-sheet.open [data-box]{transform:none}
+#more-sheet h4{font-weight:800;color:#1e3a5f;margin:10px 0 6px}#more-sheet .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}#more-sheet .grid button{padding:12px;border-radius:12px;background:#f1f5f9;font-weight:700;color:#1e3a5f}
+#toast{position:fixed;bottom:84px;left:50%;transform:translateX(-50%);background:#1e3a5f;color:#fff;padding:8px 16px;border-radius:12px;font-size:13px;z-index:100;opacity:0;pointer-events:none;transition:opacity .2s}#toast.on{opacity:1}
+@media(min-width:768px){#bnav,#more-sheet{display:none!important}}
+@media(max-width:767px){#bnav{display:flex}#sidebar,#menu-btn,#user-email,#sub-badge{display:none!important}.md\\:mr-64{margin-right:0!important}main{padding-bottom:84px!important}#hub-fab{bottom:84px}#hub-menu{bottom:150px}#chat-panel,#ai-panel{bottom:150px!important}
+ table.cardify thead{display:none}table.cardify,table.cardify tbody{display:block}table.cardify tr{display:block;background:#fff;border:1px solid #e2e8f0;border-radius:16px;margin:8px 0;padding:8px 12px;box-shadow:0 1px 3px rgba(0,0,0,.05)}table.cardify td{display:flex;justify-content:space-between;gap:12px;padding:4px 0!important;border:0!important;white-space:normal!important;text-align:left}table.cardify td::before{content:attr(data-label);font-weight:700;color:#64748b;text-align:right}}`;
+  document.head.appendChild(s);
+})();
+(function cardify() {                                                    // الجداول العريضة تتحول إلى كروت على الموبايل
+  let t; const run = () => document.querySelectorAll("main table, .card table").forEach(tb => {
+    const hs = [...tb.querySelectorAll("thead th")].map(x => x.textContent.trim()); if (!hs.length) return; tb.classList.add("cardify");
+    tb.querySelectorAll("tbody tr").forEach(tr => [...tr.children].forEach((td, i) => { if (td.dataset.label !== hs[i]) td.dataset.label = hs[i] || ""; }));
+  });
+  new MutationObserver(() => { clearTimeout(t); t = setTimeout(run, 120); }).observe(document.body, { childList: true, subtree: true });
+})();
+
+const goDev = t => { accTab = t; try { localStorage.setItem("mixar-acctab", t); } catch (e) {} show("accounts"); renderAccounts(); };
+const DEVK = ["plat", "rn", "audit", "dev"];
+const BN = () => isDev()
+  ? [["الشركات", "🏢", () => goDev("plat")], ["الطلبات", "📥", () => goDev("rn")], ["المراقبة", "📡", () => goDev("audit")], ["الأدوات", "🛠️", () => goDev("dev")]]
+  : [["الرئيسية", "🏠", () => show("dashboard"), "dashboard"], ["المعدات", "🚜", () => show("vehicles"), "vehicles"], ["التشغيل", "⚙️", () => show("ops"), "ops"], ["المالية", "💰", () => show("expenses"), "expenses"]];
+function markNav() {
+  const n = $("#bnav"); if (!n) return; const items = BN(), cur = (document.querySelector(".view:not(.hidden)") || {}).id || "";
+  let i = isDev() ? (cur === "view-accounts" ? DEVK.indexOf(accTab) : -1) : items.findIndex(x => "view-" + x[3] === cur);
+  if (i < 0) i = items.length;
+  n.querySelectorAll("button").forEach((b, k) => b.classList.toggle("on", k === i)); n.style.setProperty("--i", i);
+}
+function buildBnav() {
+  let n = $("#bnav"); if (!n) { n = document.createElement("nav"); n.id = "bnav"; document.body.appendChild(n); }
+  const items = BN(); n.style.setProperty("--n", items.length + 1);
+  n.innerHTML = `<div id="bnav-ind"></div>` + items.map((x, i) => `<button data-i="${i}"><span>${x[1]}</span>${x[0]}</button>`).join("") + `<button data-more><span>☰</span>المزيد</button>`;
+  n.onclick = e => { const b = e.target.closest("button"); if (!b) return; if (b.dataset.more !== undefined) return openSheet(); closeSheet(); items[b.dataset.i][2](); markNav(); };
+  markNav();
+}
+const GROUPS = { "التشغيل": ["readings", "ops", "quick", "down", "parts", "prod", "fuel", "rent"], "المالية": ["expenses", "advances", "acct", "costing", "reports"], "المخزن والإدارة": ["inventory", "settings", "audit", "accounts"] };
+function openSheet() {
+  let s = $("#more-sheet");
+  if (!s) { s = document.createElement("div"); s.id = "more-sheet"; s.innerHTML = `<div data-bg></div><div data-box></div>`; document.body.appendChild(s);
+    s.onclick = e => { if (e.target.dataset.bg !== undefined) return closeSheet(); const b = e.target.closest("[data-go]"); if (!b) return; closeSheet(); if (b.dataset.go === "plans") return openPlans(); show(b.dataset.go); markNav(); }; }
+  const navs = [...document.querySelectorAll("#sidebar [data-nav]")].filter(b => !b.closest(".hidden") && getComputedStyle(b).display !== "none").map(b => [b.dataset.nav, b.textContent.trim()]), used = new Set();
+  const grid = l => `<div class="grid">${l.map(x => `<button data-go="${x[0]}">${esc(x[1])}</button>`).join("")}</div>`; let h = "";
+  for (const [g, keys] of Object.entries(GROUPS)) { const l = navs.filter(x => keys.includes(x[0])); l.forEach(x => used.add(x[0])); if (l.length) h += `<h4>${g}</h4>${grid(l)}`; }
+  const rest = navs.filter(x => !used.has(x[0])); if (rest.length) h += `<h4>أخرى</h4>${grid(rest)}`;
+  if (!isDev() && myCo) h += `<h4>الاشتراك</h4>${grid([["plans", "الاشتراك والتجديد"]])}`;
+  s.querySelector("[data-box]").innerHTML = h; requestAnimationFrame(() => s.classList.add("open"));
+}
+const closeSheet = () => { const s = $("#more-sheet"); if (s) s.classList.remove("open"); };
+function toast(t) { let e = $("#toast"); if (!e) { e = document.createElement("div"); e.id = "toast"; document.body.appendChild(e); } e.textContent = t; e.classList.add("on"); clearTimeout(toast.t); toast.t = setTimeout(() => e.classList.remove("on"), 1800); }
+const show0 = show; show = function (v) { show0(v); markNav(); };
+(function backBtn() {                                                    // زر الرجوع: يغلق الأعلى أولاً ثم يعود للرئيسية ثم يطلب تأكيد الخروج
+  let armed = false; const push = () => history.pushState({ mx: 1 }, ""); push();
+  const closeTop = () => {
+    const sh = $("#more-sheet"); if (sh && sh.classList.contains("open")) { closeSheet(); return true; }
+    const ov = [...document.querySelectorAll("body > div.fixed.inset-0")].filter(e => !e.dataset.lock && !["landing", "boot-shield", "more-sheet"].includes(e.id) && !e.classList.contains("hidden")).pop();
+    if (ov) { ov.remove(); return true; }
+    for (const p of ["#chat-panel", "#ai-panel", "#hub-menu"]) { const e = $(p); if (e && !e.classList.contains("hidden")) { e.classList.add("hidden"); return true; } }
+    return false;
+  };
+  addEventListener("popstate", () => {
+    const app = $("#app"); if (!app || app.classList.contains("hidden")) return push();
+    if (closeTop()) return push();
+    const cur = (document.querySelector(".view:not(.hidden)") || {}).id;
+    if (cur && cur !== "view-dashboard" && !isDev()) { show("dashboard"); return push(); }
+    if (armed) return history.back();
+    armed = true; toast("اضغط رجوع مرة أخرى للخروج"); push(); setTimeout(() => { armed = false; }, 2000);
+  });
+})();
+function buildHub() {
+  if ($("#hub-fab")) return;
+  const f = document.createElement("button"), m = document.createElement("div"); f.id = "hub-fab"; f.textContent = "💬"; m.id = "hub-menu"; m.className = "hidden";
+  m.innerHTML = `<button data-h="ai">✨ مساعد ميكسار الذكي</button><button data-h="chat">💬 شات فريق العمل</button>`; document.body.append(f, m);
+  f.onclick = () => m.classList.toggle("hidden");
+  m.onclick = e => { const b = e.target.closest("[data-h]"); if (!b) return; m.classList.add("hidden"); ["#ai-panel", "#chat-panel"].forEach(p => $(p) && $(p).classList.add("hidden")); const t = $(b.dataset.h === "ai" ? "#ai-fab" : "#chat-fab"); if (t) t.click(); };
+}
+function inspectBar() {
+  let b = $("#insp-bar"); if (!(isDev() && ACCESS.scope && ACCESS.scope !== "main")) return b && b.remove();
+  const c = companies.find(x => x.id === ACCESS.scope);
+  if (!b) { b = document.createElement("div"); b.id = "insp-bar"; $("header").after(b); b.onclick = e => { if (!e.target.closest("button")) return; const sel = $("#scope-sel"); sel.value = "main"; sel.onchange(); goDev("plat"); }; }
+  b.innerHTML = `<span>أنت تعاين الآن: <b>${esc(c ? c.name : ACCESS.scope)}</b></span><button>رجوع للوحة المطور</button>`;
+}
+async function renderBroadcast() {
+  let b = $("#bcast"), d = null; try { d = await S.get("app_config", "broadcast"); } catch (e) {}
+  const vis = d && d.text && !isDev() && (d.target === "all" || d.target === ACCESS.ws) && sessionStorage.getItem("bc-" + d.at) !== "1";
+  if (!vis) return b && b.remove();
+  if (!b) { b = document.createElement("div"); b.id = "bcast"; $("header").after(b); }
+  b.innerHTML = `<span>📢 ${esc(d.text)}</span><button>✕</button>`; b.querySelector("button").onclick = () => { sessionStorage.setItem("bc-" + d.at, "1"); b.remove(); };
+}
+async function maintBlocked() {
+  let m = null; try { m = await S.get("app_config", "maintenance"); } catch (e) {}
+  if (!m || !m.on) return false;
+  const el = document.createElement("section"); el.id = "pending"; el.dataset.lock = 1; el.className = "fixed inset-0 z-50 grid place-items-center bg-slate-900 p-4";
+  el.innerHTML = `<div class="bg-white rounded-3xl p-8 max-w-sm w-full text-center space-y-4"><div class="text-4xl">🛠️</div><h2 class="font-extrabold">${esc(m.msg || "المنصة تحت الصيانة حالياً، نعتذر عن الإزعاج وسنعود قريباً.")}</h2><button id="mt-out" class="w-full py-2.5 rounded-xl bg-slate-200 font-bold">تسجيل الخروج</button></div>`;
+  document.body.appendChild(el); $("#mt-out").onclick = async () => { await S.logout(); location.reload(); }; return true;
+}
+const mrr = () => { const pl = (accData.pricing || PRICING).plans, mo = { month: 1, quarter: 3, year: 12 }; return Math.round(companies.filter(x => x.status === "active" && dayLeft(x) > 0 && mo[x.plan]).reduce((s, x) => s + (pl[x.plan] ? pl[x.plan].base / mo[x.plan] : 0), 0)); };
+const toolsCard = () => `<div class="border rounded-xl p-3 mb-3 space-y-2"><div class="font-bold">وضع الصيانة العام</div><div class="flex gap-2"><input id="mt-msg" class="inp" placeholder="رسالة تظهر للشركات"><button data-a="mton" class="btn">تفعيل</button><button data-a="mtoff" class="px-4 py-2.5 rounded-xl bg-slate-200 font-bold">إيقاف</button></div></div>
+  <div class="border rounded-xl p-3 mb-3 space-y-2"><div class="font-bold">بانر إداري (Broadcast)</div><div class="flex flex-wrap gap-2"><input id="bc-text" class="inp" placeholder="نص الإشعار"><select id="bc-to" class="inp !w-auto"><option value="all">كل الشركات</option>${companies.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join("")}</select><button data-a="bcsend" class="btn">إرسال</button><button data-a="bcclear" class="px-4 py-2.5 rounded-xl bg-slate-200 font-bold">مسح</button></div></div>
+  <div class="border rounded-xl p-3 mb-3 space-y-2"><div class="font-bold">فاحص المستندات الخام</div><div class="flex flex-wrap gap-2"><input id="raw-col" class="inp !w-44" placeholder="المجموعة" dir="ltr"><input id="raw-id" class="inp !w-56" dir="ltr" placeholder="Document ID"><button data-a="rawget" class="btn">عرض</button></div><pre id="raw-out" class="text-xs bg-slate-50 rounded-xl p-2 overflow-x-auto max-h-64" dir="ltr"></pre></div>`;

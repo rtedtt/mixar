@@ -2,10 +2,10 @@
    تطوير: بلال محمد سليمان | واتساب: 01128079357 | https://wa.me/201128079357
    غيّر VERSION مع كل تحديث للملفات ليصل التحديث للمستخدمين.
    الوضع دون اتصال = واجهة التطبيق فقط (البيانات والحفظ يحتاجان إنترنت). */
-const VERSION = "v27";
+const VERSION = "v30";
 const CACHE = "mixar-" + VERSION;
 const SHELL = [
-  "./", "index.html", "app.js?v=27", "qr.js?v=27", "ext.js?v=27", "viz.js?v=27", "access.js?v=27", "landing.js?v=27", "manifest.json",
+  "./", "index.html", "app.js?v=30", "qr.js?v=30", "ext.js?v=30", "viz.js?v=30", "access.js?v=30", "landing.js?v=30", "manifest.json",
   "icon-192.png", "icon-512.png", "icon-maskable-512.png", "apple-touch-icon.png",
   "mixer.png", "pump.png", "loader.png", "dump.png", "roller.png", "truck.png",   // صور المعدات
   "login-bg.jpg", "login-bg-m.jpg", "logo.png", "logo-badge.png", "icon.png"                                                  // خلفيات تسجيل الدخول
