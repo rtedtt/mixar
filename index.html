@@ -7,11 +7,6 @@
 <title>ميكسار (Mixar) | نظام إدارة محطات الخرسانة والأسفلت والمعدات</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#1e3a5f">
-<meta name="description" content="ميكسار: نظام سحابي لإدارة محطات الخرسانة والأسفلت والمعدات الثقيلة — سولار، صيانة، عهد، تشغيل وتقارير في مكان واحد.">
-<meta property="og:type" content="website"><meta property="og:locale" content="ar_EG"><meta property="og:title" content="ميكسار (Mixar) | إدارة محطات الخرسانة والمعدات">
-<meta property="og:description" content="وفّر هدر السولار وتحكم في أسطولك وصيانتك من الموبايل. جرّب مجاناً.">
-<meta property="og:image" content="data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 630'%3E%3Crect width='1200' height='630' fill='%231e3a5f'/%3E%3Crect y='560' width='1200' height='70' fill='%23e85d04'/%3E%3Ctext x='600' y='330' font-size='120' font-weight='900' fill='white' text-anchor='middle' font-family='sans-serif'%3EMixar%3C/text%3E%3C/svg%3E">
-<meta name="twitter:card" content="summary_large_image">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -133,11 +128,13 @@ body{font-family:Cairo,sans-serif}
 }
 </style>
 <style>body.is-offline{padding-top:var(--ob,0)}body.is-offline header{top:var(--ob,0)!important}body.is-offline #sidebar,body.is-offline #overlay{top:var(--ob,0)!important}</style>
+<meta name="description" content="ميكسار: منصة إدارة محطات الخرسانة والأسفلت والمعدات الثقيلة — سولار وصيانة وعُهد وتقارير بصلاحيات وعزل كامل.">
+<meta property="og:type" content="website"><meta property="og:title" content="ميكسار (Mixar) — إدارة محطات الخرسانة والأسفلت والمعدات"><meta property="og:description" content="تابع المعدات والسولار والأعطال والعُهد من مكان واحد."><meta property="og:image" content="logo.png"><meta name="twitter:card" content="summary_large_image"><meta name="theme-color" content="#1e3a5f">
 </head>
 <body class="bg-slate-50 text-slate-800">
 <div id="offline-bar" class="hidden fixed top-0 inset-x-0 z-[60] bg-red-600 text-white text-center text-sm font-bold py-1.5">أنت الآن أوفلاين — ما تسجّله يُحفظ على جهازك ويُرفع تلقائياً عند عودة الاتصال.</div>
-<div id="update-bar" class="hidden fixed top-0 inset-x-0 z-[70] bg-slate-900 text-white shadow-lg p-3 flex items-center gap-3">
-  <span class="flex-1 text-sm font-bold">تتوفر نسخة أحدث من ميكسار — اضغط للتحديث</span>
+<div id="update-bar" class="hidden fixed bottom-4 inset-x-4 z-[60] max-w-md mx-auto bg-slate-900 text-white rounded-2xl shadow-lg p-3 flex items-center gap-3">
+  <span class="flex-1 text-sm font-bold">يتوفر تحديث جديد للتطبيق.</span>
   <button id="update-btn" type="button" class="bg-amber-500 text-slate-900 font-bold rounded-xl px-4 py-1.5">تحديث الآن</button>
 </div>
 
@@ -1014,6 +1011,6 @@ body{font-family:Cairo,sans-serif}
 <script src="ext.js?v=27"></script>
 <script src="viz.js?v=27"></script>
 <script src="access.js?v=27"></script>
-<script src="p8.js?v=27"></script>
+<script src="landing.js?v=27"></script>
 </body>
 </html>

@@ -43,19 +43,20 @@ const accUsers = () => urs;
     const name = v("reg-name"), email = v("reg-email"), pass = $("#reg-pass").value, co = v("reg-co"), phone = v("reg-phone"), code = v("reg-code").toUpperCase(), job = v("reg-job");
     if (!name || !email || pass.length < 6 || (kind === "co" ? !co || !phone : !code || !job)) return fail("أكمل كل الحقول (كلمة المرور 6 أحرف على الأقل).");
     if (!S.register) return fail("إنشاء الحساب يعمل مع Firebase فقط.");
-    b.disabled = true; ACCESS.registering = true;                         // يؤجّل accessGate حتى تكتمل المستندات
+    b.disabled = true;
     try {
       let target = null;
       if (kind === "join") { target = await S.get("codes", code); if (!target) { b.disabled = false; return fail("كود الشركة غير صحيح."); } }
       const u = await S.register(email, pass), uid = u.user.uid, base = { kind: "user", name, email: email.toLowerCase(), phone, device: deviceInfo(), createdAt: Date.now() };
       if (kind === "co") {
-        const c = await genCompanyCode();
+        const c = "MX-" + (1000 + Math.floor(Math.random() * 9000));
         await S.rawSet("codes", c, { ws: uid });
         await S.rawSet("companies", uid, { name: co, code: c, type: v("reg-type"), phone, planType: "company_starter", maxUsers: 5, maxSites: 1, plan: "trial", status: "active", expiresAt: expMs(30), createdAt: Date.now() });
         await S.rawSet("biz", uid, { ...base, job: "مدير الشركة", role: "admin", status: "active", ws: uid, wsName: co, perms: { ...DEFAULT_PERMS, isWorkspaceAdmin: true } });
       } else await S.rawSet("biz", uid, { ...base, job, role: "accountant", status: "pending", ws: target.ws, perms: { ...DEFAULT_PERMS, isWorkspaceAdmin: false } });
+      location.reload();
     } catch (ex) { fail(ex.code === "auth/email-already-in-use" ? "هذا البريد مسجّل بالفعل." : "تعذر إنشاء الحساب (" + (ex.code || "") + ")"); }
-    ACCESS.registering = false; b.disabled = false;
+    b.disabled = false;
   };
 })();
 
@@ -70,12 +71,7 @@ function applyRec(user, rec, own) {
   try { localStorage.setItem(CK, JSON.stringify({ uid: user.uid, own, rec: { role: ACCESS.role, ws: ACCESS.ws, perms: ACCESS.perms, site: ACCESS.site, sites: ACCESS.sites, pages: ACCESS.pages, template: ACCESS.tpl, name: ACCESS.name, status: "active" } })); } catch (e) {}
   applyPermUI();
 }
-async function genCompanyCode() {                                        // كود فريد MX-XXXX (5 محاولات)
-  for (let i = 0; i < 5; i++) { const c = "MX-" + (1000 + Math.floor(Math.random() * 9000)); let ex = null; try { ex = await S.get("codes", c); } catch (e) {} if (!ex) return c; }
-  throw new Error("تعذر توليد كود شركة فريد، أعد المحاولة.");
-}
 async function accessGate(user) {
-  while (ACCESS.registering) await new Promise(r => setTimeout(r, 120));   // انتظر اكتمال التسجيل
   $("#pending")?.remove();
   if (!S.get) return true;                                              // الوضع التجريبي بدون Firebase
   const own = ownerRole(user.email); let c = null;
@@ -90,11 +86,6 @@ async function accessGate(user) {
     if (ok && (!rec || rec.status !== "active" || rec.role !== own || rec.ws !== "owner"))
       try { await S.rawSet("biz", user.uid, { kind: "user", name: rec?.name || (own === "dev" ? "المطور" : "المدير"), email: user.email.toLowerCase(), role: own, status: "active", ws: "owner", perms: all }); } catch (e) { console.warn(e); }
     applyRec(user, { perms: all }, own); return true;
-  }
-  if (!ok && !c) {                                                       // فشل مؤقت في الاتصال: لا تُظهر «بانتظار التفعيل»
-    const e2 = document.createElement("section"); e2.id = "pending"; e2.className = "fixed inset-0 z-50 grid place-items-center bg-slate-900 p-4";
-    e2.innerHTML = `<div class="bg-white rounded-3xl p-8 max-w-sm w-full text-center space-y-4"><div class="text-4xl">📡</div><h2 class="font-extrabold">تعذر التحقق من صلاحياتك بسبب ضعف الاتصال</h2><button id="pd-retry" class="btn w-full">إعادة المحاولة</button><button id="pd-out2" class="w-full py-2.5 rounded-xl bg-slate-200 font-bold">تسجيل الخروج</button></div>`;
-    document.body.appendChild(e2); $("#pd-retry").onclick = () => location.reload(); $("#pd-out2").onclick = async () => { await S.logout(); e2.remove(); }; return false;
   }
   if (rec && rec.status === "active") { applyRec(user, rec); return true; }
   try { localStorage.removeItem(CK); } catch (e) {}
@@ -111,17 +102,11 @@ async function accessGate(user) {
 
 /* ---------- مساحات العمل: ختم السجلات + عزل القراءة ---------- */
 const WS_COLS = ["vehicles", "expenses", "advances", "inventory", "operations", "costings", "materials", "acct", "biz"];
-function listRef(fs, db, col) {                                          // شرط where واحد فقط (بدون Composite Index) — الباقي في listFilter
-  if (col === "biz@users") return fs.query(fs.collection(db, "biz"), fs.where("ws", "==", ACCESS.ws));
-  if ((col === "audit_logs" || col === "auditlog") && ACCESS.role !== "dev") return fs.query(fs.collection(db, col), fs.where("ws", "==", ACCESS.ws));
+function listRef(fs, db, col) {                                          // غير المطور: يقرأ مساحته فقط (where بحقل واحد = بدون Composite Index)
+  if (col === "biz@users") return fs.query(fs.collection(db, "biz"), fs.where("kind", "==", "user"), fs.where("ws", "==", ACCESS.ws), fs.where("status", "in", ["pending", "active", "suspended"]));   // المدير: لا يرى المطور ولا الموقوفين
+  if (col === "audit_logs" && ACCESS.role !== "dev") return fs.query(fs.collection(db, col), fs.where("ws", "==", ACCESS.ws));
   const r = fs.collection(db, col);
-  if (!(ACCESS.role && ACCESS.role !== "dev" && WS_COLS.includes(col))) return r;
-  return restricted() && !(ACCESS.sites || []).length ? [] : fs.query(r, fs.where("workspaceId", "==", ACCESS.ws));
-}
-function listFilter(col, rows) {                                         // فلترة JavaScript بعد الاستعلام
-  if (col === "biz@users") return rows.filter(r => r.kind === "user" && ["pending", "active", "suspended"].includes(r.status));   // المدير: لا يرى المطور ولا الموقوفين
-  if (ACCESS.role && ACCESS.role !== "dev" && WS_COLS.includes(col) && restricted()) return rows.filter(r => ACCESS.sites.includes(r.siteId));
-  return rows;
+  return ACCESS.role && ACCESS.role !== "dev" && WS_COLS.includes(col) ? (restricted() ? (ACCESS.sites.length ? ACCESS.sites : []).slice(0, 5).map(s => fs.query(r, fs.where("workspaceId", "==", ACCESS.ws), fs.where("siteId", "==", s))) : fs.query(r, fs.where("workspaceId", "==", ACCESS.ws))) : r;   // موقع = استعلام مساوٍ يمكن إثباته في القواعد
 }
 function stampNew(col, d) {
   return ["users", "auditlog", "audit_logs", "password_requests", "dev_logs", "chat_msgs", "presence", "app_config"].includes(col) ? d : { workspaceId: ACCESS.scope || "main", createdBy: ACCESS.email || "", ...d, ...siteStamp() };
@@ -135,14 +120,13 @@ function scopeData() {                                                   // عز
 }
 async function scopeExt() {                                              // عزل biz و acct (ext.js) + تحميل الحسابات
   const ok = r => (r.workspaceId || "main") === ACCESS.scope && (!restricted() || ACCESS.sites.includes(r.siteId));
-  const B = typeof biz !== "undefined" ? biz : [], A = typeof acct !== "undefined" ? acct : [];
-  urs = isDev() ? B.filter(x => x.kind === "user") : [];
-  if (typeof biz !== "undefined") biz = B.filter(x => x.kind !== "user" && ok(x)); if (typeof acct !== "undefined") acct = A.filter(ok);
-  if (isWsAdmin()) urs = await listSafe("biz@users");
+  urs = isDev() ? biz.filter(x => x.kind === "user") : [];
+  biz = biz.filter(x => x.kind !== "user" && ok(x)); acct = acct.filter(ok);
+  if (ACCESS.role === "admin") urs = await listSafe("biz@users");
   if (isDev()) companies = await listSafe("companies"); else await loadCo();
-  applyPermUI(); renderAccess(); renderSub(); initChat(); applyPlan(); startSession(); hookAudit(); if (isDev()) rnList = await listSafe("renewal_requests"); renderBell(); injectBackup(); injectPeriodLock();
+  applyPermUI(); renderAccess(); renderSub(); initChat(); applyPlan(); startSession(); hookAudit(); if (isDev()) rnList = await listSafe("renewal_requests"); renderBell(); injectBackup(); renderOnboard(); loadAi();
 }
-const isDev = () => ACCESS.role === "dev", isAdm = () => ACCESS.role === "admin", isWsAdmin = () => isAdm() || !!(ACCESS.perms || {}).isWorkspaceAdmin, canPage = () => isDev() || isWsAdmin();
+const isDev = () => ACCESS.role === "dev", isAdm = () => ACCESS.role === "admin", canPage = () => isDev() || isAdm();
 let urs = [], presAll = {};
 
 /* ---------- سجل الأخطاء للمطور ---------- */
@@ -154,7 +138,7 @@ const deviceInfo = () => {
 
 /* ---------- صفحة إدارة الحسابات والصلاحيات (المطور فقط) ---------- */
 const PERM_LABELS = { canAddEquipment: "إضافة معدات", canEditDeleteEquipment: "تعديل/حذف المعدات", canAddTransactions: "تسجيل مصروفات وساعات", canEditDeleteTransactions: "تعديل/حذف الحركات", canManageCustody: "إدارة العُهد", canExportPrint: "تصدير وطباعة", isWorkspaceAdmin: "إدارة مساحة العمل", viewFinancials: "رؤية الأسعار والمبالغ", canApprove: "اعتماد العمليات" };
-const TABS = { audit: "سجل التدقيق", plat: "المنصة والشركات", rn: "طلبات التجديد", req: "طلبات الاعتماد", forgot: "استعادة الدخول", acc: "الحسابات والصلاحيات", dev: "لوحة المطور" };
+const TABS = { audit: "سجل التدقيق", plat: "المنصة والشركات", rn: "طلبات التجديد", su: "طلبات الاشتراك", req: "طلبات الاعتماد", forgot: "استعادة الدخول", acc: "الحسابات والصلاحيات", dev: "لوحة المطور" };
 let accTab = (() => { try { return localStorage.getItem("mixar-acctab") || "plat"; } catch (e) { return "plat"; } })(), accData = { pr: [], logs: [] };
 const dt = t => t ? new Date(t).toLocaleString("ar-EG") : "";
 
@@ -182,13 +166,14 @@ function renderAccess() {
   if (!$("#view-accounts").classList.contains("hidden")) renderAccounts();
 }
 
-VIEW_HOOKS.accounts = renderAccounts;
 async function renderAccounts() {
   const v = $("#view-accounts"); if (!v || !canPage()) return;
   if (!isDev() && !["req", "acc", "audit"].includes(accTab)) accTab = "req";
   if (isDev() && accTab === "plat") { accData.vs = await S.list("vehicles").catch(() => []); accData.pricing = await getPricing(true).catch(() => null); }
+  if (isDev() && accTab === "su") accData.su = (await S.list("signup_requests").catch(() => [])).sort((x, y) => (y.at || 0) - (x.at || 0));
   if (isDev() && accTab === "rn") accData.rn = (await S.list("renewal_requests").catch(() => [])).sort((x, y) => (y.at || 0) - (x.at || 0));
-  if (accTab === "audit") accData.al = (await S.list("audit_logs").catch(() => [])).filter(r => !isDev() || (r.ws || r.workspaceId || "main") === ACCESS.scope).sort((x, y) => y.at - x.at).slice(0, 150);
+  if (accTab === "audit") accData.al = (await S.list("audit_logs").catch(() => [])).sort((x, y) => y.at - x.at).slice(0, 150);
+  if (isDev() && accTab === "dev") accData.ai = await S.get("app_config", "ai_proxy").catch(() => null);
   if (isDev() && accTab === "dev") accData.cl = await S.get("app_config", "cloudinary").catch(() => null);
   if (accTab === "forgot") accData.pr = await S.list("password_requests").catch(() => []);
   if (accTab === "dev") accData.logs = (await S.list("system_errors").catch(() => [])).sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0)).slice(0, 50);
@@ -196,8 +181,9 @@ async function renderAccounts() {
   const btn = (a, id, t, c) => `<button data-a="${a}" data-id="${esc(id)}" class="${c} font-bold ml-3">${t}</button>`;
   let body = "";
   if (accTab === "plat") body = kpiCards() + pricingCard() + `<div class="flex flex-wrap gap-2 mb-3 items-end"><input id="nc-name" class="inp !w-auto" placeholder="اسم الشركة"><select id="nc-type" class="inp !w-auto"><option>خرسانة جاهزة</option><option>خلاطة أسفلت</option><option>معدات ومقاولات</option></select><input id="nc-days" type="number" value="30" class="inp !w-24"><button data-a="newco" class="btn">إنشاء شركة</button><button data-a="democo" class="px-4 py-2.5 rounded-xl bg-slate-200 font-bold">إنشاء شركة تجريبية لميكسار</button></div><table class="w-full text-sm text-right">${th(["الشركة", "الكود", "النشاط", "الباقة", "المعدات", "المستخدمون", "الحالة", "الأيام", ""])}<tbody>` + companies.map(c => { const d = dayLeft(c), n = (accData.vs || []).filter(x => (x.workspaceId || "main") === c.id).length, us = accUsers().filter(x => (x.ws || "main") === c.id).length; return `<tr class="border-b"><td class="py-2 font-bold">${esc(c.name)}</td><td dir="ltr">${esc(c.code)}</td><td>${esc(c.type || "")}</td><td><select data-plan="${esc(c.id)}" class="inp !py-1 !w-auto text-xs">${Object.entries(PLAN_DEFS).map(([k, d]) => `<option value="${k}" ${(c.planType || "company_growth") === k ? "selected" : ""}>${d.label}</option>`).join("")}</select></td><td>${n}</td><td>${us}</td><td>${c.status === "active" && d > 0 ? "✅ نشط" : "🔒 مقفل"}</td><td>${d}</td><td class="whitespace-nowrap">${[30, 90, 365].map(x => btn("ext" + x, c.id, "+" + x, "text-green-700")).join("")}${btn("extx", c.id, "مخصص", "text-slate-600")}${btn("cotog", c.id, c.status === "active" ? "إيقاف" : "تفعيل", "text-red-600")}</td></tr>`; }).join("") + `</tbody></table>`;
+  if (accTab === "su") body = `<table class="w-full text-sm text-right">${th(["الشركة", "النشاط", "المدير", "الهاتف", "الباقة", "التاريخ", "الحالة", ""])}<tbody>` + (accData.su || []).map(r => `<tr class="border-b"><td class="py-2 font-bold">${esc(r.company)}</td><td>${esc(r.type)}</td><td>${esc(r.name)}</td><td dir="ltr">${esc(r.phone)}</td><td>${esc(r.plan)}</td><td class="text-xs">${dt(r.at)}</td><td>${esc(r.status)}</td><td class="whitespace-nowrap">${r.status === "pending" ? btn("suok", r.id, "تم التواصل", "text-green-700") : ""}${btn("sudel", r.id, "حذف", "text-red-600")}</td></tr>`).join("") + `</tbody></table>`;
   if (accTab === "rn") body = `<table class="w-full text-sm text-right">${th(["الشركة", "الكود", "الباقة", "رقم التحويل", "الإيصال", "التاريخ", "الحالة", ""])}<tbody>` + (accData.rn || []).map(r => `<tr class="border-b"><td class="py-2 font-bold">${esc(r.company)}</td><td dir="ltr">${esc(r.code)}</td><td>${esc(r.plan)}</td><td>${esc(r.ref)}</td><td>${r.receipt ? `<a href="${esc(r.receipt)}" target="_blank" rel="noopener"><img src="${esc(r.receipt)}" class="h-12 rounded"></a>` : "—"}</td><td class="text-xs">${dt(r.at)}</td><td>${esc(r.status)}</td><td class="whitespace-nowrap">${r.status === "pending" ? btn("rnok", r.id, "اعتماد وتمديد", "text-green-700") + btn("rnno", r.id, "رفض", "text-red-600") : ""}</td></tr>`).join("") + `</tbody></table>`;
-  if (accTab === "audit") { const q = (accData.q || "").trim(); body = `<div class="flex gap-2 mb-3"><input id="al-q" class="inp" placeholder="بحث في السجل ثم Enter" value="${esc(q)}"><select id="al-type" class="inp !w-auto"><option value="">كل الأحداث</option>${[...new Set((accData.al || []).map(r => r.type))].map(t => `<option ${accData.t === t ? "selected" : ""}>${esc(t)}</option>`).join("")}</select><input id="al-from" type="date" class="inp !w-auto" value="${accData.f || ""}"><input id="al-to" type="date" class="inp !w-auto" value="${accData.to || ""}"><button data-a="alcsv" class="btn">تصدير CSV</button></div><table class="w-full text-sm text-right">${th(["الوقت", "المنفّذ", "الدور", "الحدث", "الهدف", "التفاصيل"])}<tbody>` + alRows().map(r => `<tr class="border-b text-xs"><td class="py-1">${dt(r.at)}</td><td>${esc(r.name)}</td><td>${esc(r.role)}</td><td>${esc(r.type)}</td><td>${esc(r.target)}</td><td>${esc(r.summary)}</td></tr>`).join("") + `</tbody></table>`; }
+  if (accTab === "audit") { const q = (accData.q || "").trim(); body = `<div class="flex gap-2 mb-3"><input id="al-q" class="inp" placeholder="بحث في السجل ثم Enter" value="${esc(q)}"><select id="al-type" class="inp !w-auto"><option value="">كل الأحداث</option>${[...new Set((accData.al || []).map(r => r.type))].map(t => `<option ${accData.t === t ? "selected" : ""}>${esc(t)}</option>`).join("")}</select><select id="al-user" class="inp !w-auto"><option value="">كل المنفّذين</option>${[...new Set((accData.al || []).map(r => r.name).filter(Boolean))].map(n => `<option ${accData.u === n ? "selected" : ""}>${esc(n)}</option>`).join("")}</select><select id="al-site" class="inp !w-auto"><option value="">كل المواقع</option>${[...new Set((accData.al || []).map(r => r.siteId).filter(Boolean))].map(n => `<option ${accData.s === n ? "selected" : ""}>${esc(n)}</option>`).join("")}</select><input id="al-from" type="date" class="inp !w-auto" value="${accData.f || ""}"><input id="al-to" type="date" class="inp !w-auto" value="${accData.to || ""}"><button data-a="alcsv" class="btn">تصدير CSV</button></div><table class="w-full text-sm text-right">${th(["الوقت", "المنفّذ", "الدور", "الحدث", "الهدف", "التفاصيل"])}<tbody>` + alRows().map(r => `<tr class="border-b text-xs"><td class="py-1">${dt(r.at)}</td><td>${esc(r.name)}</td><td>${esc(r.role)}</td><td>${esc(r.type)}</td><td>${esc(r.target)}</td><td>${esc(r.summary)}</td></tr>`).join("") + `</tbody></table>`; }
   if (accTab === "req") body = `<table class="w-full text-sm text-right">${th(["الاسم / الوظيفة", "الموقع", "البريد", "الجهاز", ""])}<tbody>` +
     (users.filter(u => u.status === "pending").map(u => `<tr class="border-b"><td class="py-2"><b>${esc(u.name)}</b><div class="text-xs text-slate-500">${esc(u.job || "")}</div><div class="text-xs mt-1">⏳ قيد الانتظار</div></td><td>${esc(u.site || "")}</td><td dir="ltr" class="text-xs">${esc(u.email)}</td><td class="text-xs">${esc(u.device || "")}</td><td class="whitespace-nowrap">${btn("ok", u.id, "قبول", "text-green-700")}${btn("del", u.id, "رفض", "text-red-600")}</td></tr>`).join("") || `<tr><td colspan="5" class="py-4 text-slate-500">لا توجد طلبات.</td></tr>`) + `</tbody></table>`;
   if (accTab === "forgot") body = `<table class="w-full text-sm text-right">${th(["الاسم / البريد", "الجهاز", "التاريخ", ""])}<tbody>` +
@@ -209,7 +195,7 @@ async function renderAccounts() {
       (fx ? "" : tplControls(u) + `<div class="grid sm:grid-cols-2 gap-1 mt-2 text-sm">${Object.entries(PERM_LABELS).map(([k, l]) => `<label><input type="checkbox" data-perm="${k}" data-id="${esc(u.id)}" ${p[k] ? "checked" : ""} class="ml-2">${l}</label>`).join("")}</div><div class="mt-2">${u.role === "admin" && !isDev() ? "" : u.status === "active" ? btn("susp", u.id, "توقيف مؤقت", "text-orange-700") + btn("cancel", u.id, "إلغاء الحساب", "text-red-600") : btn("react", u.id, "إعادة تفعيل", "text-green-700") + (u.status === "cancelled" ? "" : btn("cancel", u.id, "إلغاء الحساب", "text-red-600"))}${isDev() ? btn("unlink", u.id, "فك الارتباط", "text-slate-600") + (u.role !== "admin" ? btn("promote", u.id, "ترقية لمدير شركة", "text-blue-700") : "") : ""}</div>`) + `</div>`; }).join("") +
       `</div><div class="mt-3 flex flex-wrap gap-2 items-end ${isDev() ? "" : "hidden"}"><input id="lk-name" class="inp !w-auto" placeholder="اسم المجموعة (مثال: موقع أبو رواش)"><button data-a="link" class="btn">ربط المحدَّدين في مساحة مشتركة</button></div>`;
   }
-  if (accTab === "dev") body = `<div class="border rounded-xl p-3 mb-3 space-y-2"><div class="font-bold">إعدادات رفع الميديا (Cloudinary)</div><div class="grid sm:grid-cols-2 gap-2"><input id="cl-cloud" class="inp" placeholder="Cloud Name" dir="ltr" value="${esc(accData.cl?.cloud || "")}"><input id="cl-preset" class="inp" placeholder="Upload Preset (Unsigned)" dir="ltr" value="${esc(accData.cl?.preset || "")}"></div><button data-a="clsave" class="btn">حفظ</button></div><div class="flex gap-2 flex-wrap mb-3"><button data-a="cache" class="btn">تحديث الكاش إجبارياً</button><button data-a="stamp" class="btn">ختم البيانات السابقة بالنطاق الرئيسي</button></div><table class="w-full text-sm text-right">${th(["الوقت", "المستخدم", "الصفحة", "الجهاز", "الخطأ"])}<tbody>` +
+  if (accTab === "dev") body = aiCard() + `<div class="border rounded-xl p-3 mb-3 space-y-2"><div class="font-bold">إعدادات رفع الميديا (Cloudinary)</div><div class="grid sm:grid-cols-2 gap-2"><input id="cl-cloud" class="inp" placeholder="Cloud Name" dir="ltr" value="${esc(accData.cl?.cloud || "")}"><input id="cl-preset" class="inp" placeholder="Upload Preset (Unsigned)" dir="ltr" value="${esc(accData.cl?.preset || "")}"></div><button data-a="clsave" class="btn">حفظ</button></div><div class="flex gap-2 flex-wrap mb-3"><button data-a="cache" class="btn">تحديث الكاش إجبارياً</button><button data-a="stamp" class="btn">ختم البيانات السابقة بالنطاق الرئيسي</button></div><table class="w-full text-sm text-right">${th(["الوقت", "المستخدم", "الصفحة", "الجهاز", "الخطأ"])}<tbody>` +
     accData.logs.map(l => `<tr class="border-b text-xs"><td class="py-1">${dt(l.lastAt)}</td><td dir="ltr">${esc(l.lastUser || l.user || "")}</td><td>${esc((l.file || "") + ":" + (l.line || ""))}</td><td>${esc(l.lastDevice || l.device || "")}</td><td>${esc(l.msg)} ×${l.count || 1}</td></tr>`).join("") + `</tbody></table>`;
   v.innerHTML = `<h2 class="text-xl font-extrabold">إدارة الحسابات والصلاحيات</h2><div class="flex gap-2 flex-wrap">${Object.entries(TABS).filter(([k]) => isDev() || ["req", "acc", "audit"].includes(k)).map(([k, l]) => `<button data-tab="${k}" class="px-3 py-1.5 rounded-xl text-sm font-bold ${k === accTab ? "bg-amber-500 text-slate-900" : "bg-slate-200"}">${l}</button>`).join("")}</div><div class="card overflow-x-auto">${body}</div>`;
 }
@@ -260,19 +246,27 @@ async function accClick(ev) {
       const q = (accData.rn || []).find(x => x.id === id); if (q) q.status = "rejected"; rnList = rnList.filter(x => x.id !== id); renderBell();
     }
     if (a === "democo") {
-      const wid = "co_" + Date.now().toString(36), code = await genCompanyCode();
+      const wid = "co_" + Date.now().toString(36), code = "MX-" + (1000 + Math.floor(Math.random() * 9000));
       await S.rawSet("codes", code, { ws: wid });
       await S.rawSet("companies", wid, { name: "شركة تجريبية لميكسار", code, type: "تجريبي", plan: "manual", planType: "company_growth", maxUsers: 15, maxSites: 3, status: "active", expiresAt: expMs(30), createdAt: Date.now() });
     }
     if (a === "newco") {
       const name = $("#nc-name").value.trim(), days = +$("#nc-days").value || 30; if (!name) { b.disabled = false; return alert("اكتب اسم الشركة."); }
-      const wid = "co_" + Date.now().toString(36), code = await genCompanyCode();
+      const wid = "co_" + Date.now().toString(36), code = "MX-" + (1000 + Math.floor(Math.random() * 9000));
       await S.rawSet("codes", code, { ws: wid });
       await S.rawSet("companies", wid, { name, code, type: $("#nc-type").value, plan: "manual", planType: "company_growth", maxUsers: 15, maxSites: 3, status: "active", expiresAt: expMs(days), createdAt: Date.now() });
     }
     if (a === "susp") await S.save("biz", { status: "suspended" }, id);
     if (a === "react") await S.save("biz", { status: "active" }, id);
     if (a === "cancel" && confirm("إلغاء هذا الحساب؟ لن تُحذف أي بيانات سجّلها.")) await S.save("biz", { status: "cancelled" }, id);
+    if (a === "suok") await S.rawSet("signup_requests", id, { status: "contacted" });
+    if (a === "sudel") await S.remove("signup_requests", id);
+    if (a === "aisave") { const u = $("#ai-url").value.trim(); if (u && !/^https:\/\//.test(u)) { b.disabled = false; return alert("الرابط يجب أن يبدأ بـ https://"); } await S.rawSet("app_config", "ai_proxy", { url: u }); await loadAi(); }
+    if (a === "pmadd" || a === "pmdel") {
+      const p0 = accData.pricing || PRICING; let l = (p0.promoList || []).filter(x => x.code !== (a === "pmdel" ? id : $("#pm-code").value.trim().toUpperCase()));
+      if (a === "pmadd") { const code = $("#pm-code").value.trim().toUpperCase(), pct = Math.min(90, +$("#pm-pct").value || 0); if (!/^[A-Z0-9]{3,20}$/.test(code) || pct <= 0) { b.disabled = false; return alert("اكتب كوداً (حروف/أرقام إنجليزية) ونسبة صحيحة."); } l.push({ code, pct }); }
+      await S.rawSet("app_config", "pricing", { promoList: l }); pricingCache = null; accData.pricing = await getPricing(true);
+    }
     if (a === "clsave") { await S.rawSet("app_config", "cloudinary", { cloud: $("#cl-cloud").value.trim(), preset: $("#cl-preset").value.trim() }); cl = null; alert("تم حفظ إعدادات Cloudinary."); }
     if (a === "unlink") await S.save("biz", { ws: id, wsName: "" }, id);
     if (a === "done") { await S.remove("password_requests", id); accData.pr = accData.pr.filter(r => r.id !== id); }
@@ -293,7 +287,7 @@ async function accClick(ev) {
   b.disabled = false; renderAccounts();
 }
 async function accChange(ev) {
-  const at = ev.target.closest("#al-type"); if (at) { accData.t = at.value; return renderAccounts(); }
+  const at = ev.target.closest("#al-type, #al-user, #al-site"); if (at) { accData[at.id === "al-type" ? "t" : at.id === "al-user" ? "u" : "s"] = at.value; return renderAccounts(); }
   const al = ev.target.closest("#al-q"); if (al) { accData.q = al.value; return renderAccounts(); }
   const tp = ev.target.closest("[data-tpl]");
   if (tp && tp.value) { const t = ROLE_TPL[tp.value]; try { await S.save("biz", { template: tp.value, perms: t.perms, pages: t.pages || [] }, tp.dataset.tpl); auditEvt("role_template", tp.dataset.tpl, t.label); await loadData(); } catch (e) { dbErr(e); } return; }
@@ -332,45 +326,13 @@ const presTxt = id => { const p = presAll[id]; return !p ? "لم يدخل بعد
 
 (function permCss() {                                                    // إخفاء الأزرار غير المصرح بها
   const s = document.createElement("style");
-  s.textContent = `.np-eadd #vehicle-form,.np-eed #v-list [data-edit],.np-eed #v-list [data-del],.np-eed :is([data-arch],[data-restore],[data-purge],#arch-form),
-.np-tadd :is([data-oil],#pt-end-form,#expense-form,#ops-form,#inv-form,#mat-form,#fout-form,#fin-form,#dn-form,#dr-form,#rc-form,#rd-form,#rl-form,#sp-form,#mt-form,#mv-form,#oil-form,#pay-form,#pd-form,#pt-form,#ac-form,#co-form),
-.np-ted :is(#edit-form,#x-edit-form,[data-dn-fix],[data-pt-end],[data-a-pdel],[data-del-exp],[data-del-op],[data-inv-del],[data-mat-del],[data-cc-del],[data-cs-del],[data-q-del],[data-qs-del],[data-edit-exp],[data-edit-op],[data-inv-edit],[data-mat-edit],[data-co-edit],[data-dr-edit]),
+  s.textContent = `.np-eadd #vehicle-form,.np-eed #v-list [data-edit],.np-eed #v-list [data-del],
+.np-tadd :is([data-oil],#arch-form,#pt-end-form,#expense-form,#ops-form,#inv-form,#mat-form,#fout-form,#fin-form,#dn-form,#dr-form,#rc-form,#rd-form,#rl-form,#sp-form,#mt-form,#mv-form,#oil-form,#pay-form,#pd-form,#pt-form,#ac-form,#co-form),
+.np-ted :is(#edit-form,#x-edit-form,[data-arch],[data-dn-fix],[data-pt-end],[data-a-pdel],[data-del-exp],[data-del-op],[data-inv-del],[data-mat-del],[data-cc-del],[data-cs-del],[data-q-del],[data-qs-del],[data-edit-exp],[data-edit-op],[data-inv-edit],[data-mat-edit],[data-co-edit],[data-dr-edit]),
 .np-cust :is(#adv-form,#adv-edit-form,[data-adv-del],[data-adv-item-del],[data-adv-edit],[data-adv-item-edit],[data-adv-reopen]),
-.np-exp :is([data-export],#export-btn){display:none!important}
-@media(max-width:640px){header{gap:.25rem;padding-inline:.5rem}#scope-sel{max-width:6rem;font-size:11px}#sub-badge{font-size:10px;padding:2px 6px;max-width:5.5rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#bell{padding:0 .25rem}header #user-email{display:none}.fixed.inset-0>div{max-height:92vh;overflow-y:auto;max-width:100%}.card{overflow-x:auto}.card table{display:block;overflow-x:auto}input,select,textarea{max-width:100%}.btn,.btn-dark{padding-inline:.9rem}}`;
+.np-exp :is([data-export],#export-btn){display:none!important}`;
   document.head.appendChild(s);
 })();
-const LOCK_COLS = ["expenses", "operations", "biz", "acct"];
-const lockUntil = () => String(((typeof curCo === "function" && curCo()) || {}).lockedUntilDate || "");
-const recDate = r => String((r && (r.date || r.day || r.from || r.start)) || "").slice(0, 10);
-function guardWrite(op, col, d, id) {                                    // منع برمجي: قفل فترة + قراءة فقط + صلاحيات + مواقع
-  if (!ACCESS.uid || (!WS_COLS.includes(col) && col !== "biz")) return;
-  if (col === "biz" && userOp(col, d)) return;
-  const deny = m => { try { alert(m); } catch (e) {} throw new Error(m); };
-  const L = lockUntil(), old = id ? findRec(col, id) : null;
-  if (L && LOCK_COLS.includes(col)) {                                    // قفل الفترة المحاسبية: أثر رجعي ممنوع
-    const nd = op === "save" ? (recDate(d) || (old ? "" : new Date().toISOString().slice(0, 10))) : "", od = recDate(old);
-    if ((nd && nd <= L) || (od && od <= L)) deny(`الفترة المحاسبية مقفلة حتى ${L} — لا يمكن إضافة أو تعديل أو حذف سجل بتاريخ في أو قبل هذا اليوم.`);
-  }
-  if (isDev()) return;
-  const p = ACCESS.perms || {}, all = isWsAdmin();
-  if (ACCESS.locked) deny("اشتراك شركتك منتهٍ — النظام مقفل. جدّد الاشتراك.");
-  if (ACCESS.readOnly) deny("اشتراك شركتك منتهٍ — النظام في وضع القراءة فقط خلال فترة السماح (72 ساعة). جدّد الاشتراك.");
-  const edit = op === "remove" || !!id, meter = col === "vehicles" && op === "save" && !!id && Object.keys(d || {}).every(k => ["hours", "hoursDate", "hlog", "lastOil", "oilLog", "location"].includes(k));
-  const need = col === "vehicles" ? (edit ? "canEditDeleteEquipment" : "canAddEquipment") : col === "advances" ? "canManageCustody" : (edit ? "canEditDeleteTransactions" : "canAddTransactions");
-  if (!all && !p[need] && !(meter && p.canAddTransactions)) deny("ليست لديك صلاحية لتنفيذ هذه العملية.");   // تحديث عداد المعدة يكفيه صلاحية المعاملات
-  if (restricted()) { const sid = (d && d.siteId) || (old && old.siteId); if (sid && !ACCESS.sites.includes(sid)) deny("هذا السجل خارج المواقع المخصصة لك."); }
-}
-function injectPeriodLock() {                                            // إعداد تاريخ إغلاق الفترة المحاسبية
-  const v = $("#view-settings"); if (!v || !(isDev() || isWsAdmin())) return;
-  let c = $("#pl-card");
-  if (!c) { c = document.createElement("div"); c.id = "pl-card"; c.className = "card space-y-2 mb-3"; v.prepend(c);
-    c.innerHTML = `<h3 class="font-extrabold">قفل الفترة المحاسبية</h3><p class="text-xs text-slate-500">لا يُسمح بإضافة أو تعديل أو حذف سجلات مالية أو تشغيلية بتاريخ في أو قبل هذا اليوم.</p><div class="flex gap-2 flex-wrap items-center"><input id="pl-date" type="date" class="inp !w-auto"><button type="button" id="pl-save" class="btn">حفظ</button><button type="button" id="pl-open" class="btn-dark">فتح الفترة</button></div>`;
-    const save = async val => { const id = coId(); if (!id) return alert("اختر شركة محددة أولاً."); const old = lockUntil();
-      try { await S.rawSet("companies", id, { lockedUntilDate: val }); const co = curCo(); if (co) co.lockedUntilDate = val; auditEvt("period_lock", "companies/" + id, `تغيير تاريخ إغلاق الفترة: من ${old || "—"} إلى ${val || "مفتوحة"}`); $("#pl-date").value = val; alert(val ? "تم قفل الفترة حتى " + val : "تم فتح الفترة."); } catch (e) { alert("تعذر الحفظ: " + (e.code || e.message)); } };
-    $("#pl-save").onclick = () => save($("#pl-date").value); $("#pl-open").onclick = () => confirm("فتح الفترة المحاسبية بالكامل؟") && save(""); }
-  $("#pl-date").value = lockUntil();
-}
 function applyPermUI() {
   const p = ACCESS.perms || {}, all = isDev() || isAdm() || p.isWorkspaceAdmin, t = (c, k) => document.body.classList.toggle(c, locked() || !(all || p[k]));
   t("np-eadd", "canAddEquipment"); t("np-eed", "canEditDeleteEquipment"); t("np-tadd", "canAddTransactions");
@@ -402,10 +364,10 @@ function buildChat() {
   p.id = "chat-panel"; p.className = "hidden fixed bottom-20 left-4 z-40 w-[22rem] max-w-[calc(100vw-2rem)] h-[28rem] max-h-[70vh] bg-white rounded-2xl shadow-2xl border flex flex-col no-print";
   p.innerHTML = `<div class="p-3 border-b"><div class="font-extrabold">شات مساحة العمل</div><div id="chat-mem" class="text-xs text-slate-500"></div><div class="text-[10px] text-slate-400">للإدارة الفنية صلاحية الاطلاع على المحادثات لأغراض الدعم.</div></div>
     <div id="chat-list" class="flex-1 overflow-y-auto p-3 space-y-2 text-sm"></div>
-    <div class="p-2 border-t flex gap-2 items-center"><label class="cursor-pointer text-xl px-1"><i class="fa-solid fa-paperclip"></i><input id="chat-file" type="file" accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx" class="hidden"></label><input id="chat-in" class="inp !py-1.5" placeholder="اكتب رسالة..."><button id="chat-send" class="btn !px-3 !py-1.5">إرسال</button></div>`;
+    <div class="p-2 border-t flex gap-2 items-center"><label class="cursor-pointer text-xl px-1"><i class="fa-solid fa-paperclip"></i><input id="chat-file" type="file" accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx" class="hidden"></label><input id="chat-in" class="inp !py-1.5" placeholder="اكتب رسالة..."><button id="chat-mic" class="text-xl px-1" title="رسالة صوتية">🎤</button><button id="chat-send" class="btn !px-3 !py-1.5">إرسال</button></div>`;
   document.body.append(f, p);
   f.onclick = () => { p.classList.toggle("hidden"); markSeen(); paintChat(); };
-  $("#chat-send").onclick = () => sendChat();
+  $("#chat-send").onclick = () => sendChat(); $("#chat-mic").onclick = toggleRec;
   $("#chat-in").onkeydown = e => { if (e.key === "Enter") sendChat(); };
   $("#chat-file").onchange = e => { if (e.target.files[0]) sendChat(e.target.files[0]); e.target.value = ""; };
   p.onclick = e => {
@@ -425,14 +387,14 @@ function paintChat() {
   if (!open) return; markSeen();
   list.innerHTML = chatMsgs.map(m => {
     const mine = m.uid === ACCESS.uid, f = m.file;
-    return `<div class="flex ${mine ? "justify-start" : "justify-end"}"><div class="max-w-[85%] rounded-xl p-2 ${mine ? "bg-amber-100" : "bg-slate-100"}"><div class="text-[11px] font-bold text-slate-500">${esc(m.name || "")} · ${ago(m.at)}</div>${m.text ? `<div>${esc(m.text)}</div>` : ""}` +
+    return `<div class="flex ${mine ? "justify-start" : "justify-end"}"><div class="max-w-[85%] rounded-xl p-2 ${mine ? "bg-amber-100" : "bg-slate-100"}"><div class="text-[11px] font-bold text-slate-500">${esc(m.name || "")} · ${ago(m.at)}</div>${m.text ? `<div>${esc(m.text)}</div>` : ""}${m.voice ? `<audio controls src="${esc(m.voice)}" class="mt-1 h-8 w-full"></audio>` : ""}` +
       (f ? (f.type === "image" ? `<img src="${esc(f.url)}" data-zoom="${esc(f.url)}" class="mt-1 max-h-48 rounded cursor-zoom-in">` : f.type === "video" ? `<video src="${esc(f.url)}" controls class="mt-1 max-h-48 rounded"></video>` : `<a href="${esc(f.url)}" target="_blank" rel="noopener" download class="mt-1 block text-orange-700 underline">⬇ ${esc(f.name)}</a>`) : "") + `</div></div>`;
   }).join("");
   list.scrollTop = list.scrollHeight;
 }
 
-async function sendChat(file) {
-  const inp = $("#chat-in"), text = inp.value.trim(); if (!text && !file) return;
+async function sendChat(file, voice) {
+  const inp = $("#chat-in"), text = inp.value.trim(); if (!text && !file && !voice) return;
   try {
     let f = null;
     if (file) {
@@ -444,7 +406,7 @@ async function sendChat(file) {
       f = { url: j.secure_url, type: j.resource_type === "image" || j.resource_type === "video" ? j.resource_type : "file", name: file.name };
     }
     inp.value = "";
-    await S.rawAdd("chat_msgs", { ws: chatWs(), uid: ACCESS.uid, name: isDev() ? "الدعم الفني" : (ACCESS.name || ACCESS.email), text, file: f, at: Date.now() });
+    await S.rawAdd("chat_msgs", { ws: chatWs(), uid: ACCESS.uid, name: isDev() ? "الدعم الفني" : (ACCESS.name || ACCESS.email), text, file: f, voice: voice || "", at: Date.now() });
   } catch (e) { console.error(e); alert("تعذر الإرسال: " + (e.message || e.code || "")); }
 }
 
@@ -452,6 +414,7 @@ async function sendChat(file) {
 const PAY_NO = "01128079357";
 let companies = [], myCo = null;
 const toMs = x => typeof x === "number" && isFinite(x) ? x : (x && x.toMillis ? x.toMillis() : Number(x) || 0);
+const GRACE = 259200000;   // فترة سماح 72 ساعة
 const expMs = d => Date.now() + Math.max(1, Math.floor(+d || 0)) * 864e5;   // مدة اشتراك رقمية صالحة دائماً
 const dayLeft = c => c ? Math.ceil((toMs(c.expiresAt) - Date.now()) / 864e5) : 0;
 const locked = () => !!ACCESS.locked;
@@ -459,15 +422,14 @@ async function loadCo() {
   myCo = null; ACCESS.locked = false;
   if (isDev() || !S.get || !ACCESS.ws) return;
   try { myCo = await S.get("companies", ACCESS.ws); } catch (e) { return; }
-  ACCESS.locked = !!myCo && (myCo.status !== "active" || toMs(myCo.expiresAt) + 72 * 36e5 < Date.now());   // م8: سماح 72 ساعة
-  ACCESS.readOnly = !!myCo && !ACCESS.locked && toMs(myCo.expiresAt) < Date.now();   // شركة بلا مستند اشتراك = حساب قديم يعمل كالمعتاد
+  ACCESS.locked = !!myCo && (myCo.status !== "active" || toMs(myCo.expiresAt) + GRACE < Date.now());   // قراءة فقط بعد انتهاء فترة السماح   // شركة بلا مستند اشتراك = حساب قديم يعمل كالمعتاد
 }
 function renderSub() {
   let b = $("#sub-badge");
   if (!b) { b = document.createElement("button"); b.id = "sub-badge"; $("header").lastElementChild.before(b); b.onclick = openPlans; }
   b.classList.toggle("hidden", isDev() || !myCo); if (!myCo) return;
-  const d = dayLeft(myCo), off = locked();
-  b.textContent = off ? "🔒 الاشتراك منتهي — تجديد" : `${myCo.plan === "trial" ? "تجربة مجانية" : "مشترك"}: ${d} يوم · الاشتراك والتجديد`;
+  graceBar(); const d = dayLeft(myCo), off = locked();
+  b.textContent = off ? "🔒 الاشتراك منتهي — تجديد" : (d <= 0 ? "فترة سماح — جدّد الآن" : `${myCo.plan === "trial" ? "تجربة مجانية" : "مشترك"}: ${d} يوم · الاشتراك والتجديد`);
   b.className = "text-xs font-bold px-2 py-1 rounded-lg border " + (off ? "bg-red-50 text-red-700 border-red-300" : d <= 7 ? "bg-amber-50 text-amber-800 border-amber-300" : "bg-green-50 text-green-700 border-green-300");
 }
 
@@ -488,7 +450,7 @@ function pricingCard() {
   return `<div class="border rounded-xl p-3 mb-4 space-y-2"><div class="font-bold">إدارة الأسعار والخصومات</div>
     <div class="grid sm:grid-cols-3 gap-2">${L.map(([k, l]) => `<div class="text-sm"><b>${l}</b><input id="pr-${k}-base" type="number" class="inp mt-1" value="${p.plans[k].base}" placeholder="السعر الأساسي"><input id="pr-${k}-disc" type="number" class="inp mt-1" value="${p.plans[k].disc}" placeholder="سعر الخصم"></div>`).join("")}</div>
     <div class="flex flex-wrap gap-2 items-center"><label class="text-sm">مدة الخصم (أيام)</label><input id="pr-days" type="number" class="inp !w-24" value="${p.discountDays}"><button data-a="prsave" class="btn">حفظ الأسعار</button><button data-a="discstart" class="btn">بدء / تفعيل الخصم الآن</button><button data-a="discstop" class="px-4 py-2.5 rounded-xl bg-slate-200 font-bold">إيقاف الخصم</button></div>
-    <div class="text-xs ${on ? "text-green-700" : "text-slate-500"}">${on ? `الخصم مفعّل — متبقٍ ${Math.ceil((p.discountEndsAt - Date.now()) / 864e5)} يوم` : "الخصم غير مفعّل — تظهر الأسعار الأساسية."}</div></div>`;
+    ${promoBlock(p)}<div class="text-xs ${on ? "text-green-700" : "text-slate-500"}">${on ? `الخصم مفعّل — متبقٍ ${Math.ceil((p.discountEndsAt - Date.now()) / 864e5)} يوم` : "الخصم غير مفعّل — تظهر الأسعار الأساسية."}</div></div>`;
 }
 async function openPlans() {
   const co = myCo || {}; let p = null, stale = false;
@@ -524,7 +486,7 @@ const planInfo = c => { const d = PLAN_DEFS[(c || {}).planType] || PLAN_DEFS.com
 const curCo = () => isDev() ? companies.find(x => x.id === ACCESS.scope) : myCo;
 function planHidden() {                                                  // الواجهة الديناميكية: صفحات خارج الباقة لا تُرسم
   const m = isDev() ? "all" : planInfo(myCo).modules, out = [];
-  if (ACCESS.pages && !isDev() && !isWsAdmin()) ALL_PAGES.forEach(p => { if (!ACCESS.pages.includes(p) && !["dashboard", "settings", "accounts"].includes(p)) out.push(p); });
+  if (ACCESS.pages && !isDev() && !isAdm()) ALL_PAGES.forEach(p => { if (!ACCESS.pages.includes(p) && !["dashboard", "settings", "accounts"].includes(p)) out.push(p); });
   if (m !== "all") ALL_PAGES.forEach(p => { if (!m.includes(p) && !["dashboard", "settings", "accounts"].includes(p)) out.push(p); });
   return out;
 }
@@ -539,20 +501,6 @@ function planCard() {
   const c = curCo(); if (!c) return "";
   const p = planInfo(c), used = usedSeats(), warn = used >= p.maxUsers ? "bg-red-50 text-red-700 border-red-300" : used >= p.maxUsers - 1 && p.maxUsers > 1 ? "bg-amber-50 text-amber-800 border-amber-300" : "bg-slate-50 text-slate-700";
   return `<div class="border rounded-xl p-3 mb-3 text-sm ${warn}"><b>${esc(p.label)}</b> · المستخدمون: ${used} / ${p.maxUsers} · المواقع: حتى ${p.maxSites}${used >= p.maxUsers ? " — وصلت للحد الأقصى، رقّ الباقة" : ""}</div>`;
-}
-async function startSession() {                                          // مقعد واحد: جلسة واحدة فقط
-  if (isDev() || !S.listen || !myCo || planInfo(myCo).maxUsers !== 1 || startSession.done) return; startSession.done = true;
-  ACCESS.sid = Math.random().toString(36).slice(2) + Date.now().toString(36);
-  try {                                                                  // م8: تعارض الجلسة — اعرض الجهاز النشط
-    const ex = S.get ? await S.get("sessions", ACCESS.uid) : null;
-    if (ex && ex.sid && Date.now() - (ex.at || 0) < 150000 && !(typeof P8 !== "undefined" && P8.sessionConflict ? await P8.sessionConflict(ex) : confirm("الحساب مفتوح على جهاز آخر (" + (ex.device || "غير معروف") + "). إنهاء الجلسة الأخرى والدخول من هنا؟"))) { await S.logout(); return location.reload(); }
-    await S.rawSet("sessions", ACCESS.uid, { ws: ACCESS.ws, sid: ACCESS.sid, at: Date.now(), device: deviceInfo().slice(0, 120) });
-    setInterval(() => { if (!document.hidden) S.rawSet("sessions", ACCESS.uid, { at: Date.now() }).catch(() => {}); }, 60000);
-  } catch (e) { return; }
-  S.listen("sessions", ACCESS.ws, rows => {
-    const m = rows.find(r => r.id === ACCESS.uid);
-    if (m && m.sid !== ACCESS.sid) { alert("تم فتح هذا الحساب من جهاز أو متصفح آخر، وسيتم إنهاء هذه الجلسة."); S.logout().then(() => location.reload()); }
-  });
 }
 
 /* ---------- صائد الأخطاء الصامت (system_errors) ---------- */
@@ -583,7 +531,7 @@ const ROLE_TPL = {
   viewer_readonly: { label: "مشاهد / مراقب فقط", perms: P(), pages: ["dashboard", "vehicles", "reports"] }
 };
 const canSeeMoney = () => isDev() || isAdm() || !!(ACCESS.perms || {}).isWorkspaceAdmin || (ACCESS.perms || {}).viewFinancials !== false;
-const restricted = () => !isDev() && !isWsAdmin() && Array.isArray(ACCESS.sites) && !ACCESS.sites.includes("*");
+const restricted = () => !isDev() && !isAdm() && Array.isArray(ACCESS.sites) && !ACCESS.sites.includes("*");
 const siteStamp = () => restricted() && ACCESS.sites[0] ? { siteId: ACCESS.sites[0] } : {};
 function bootShield(on) {                                                // لا وميض لبيانات غير مفلترة قبل اكتمال الصلاحيات
   let s = $("#boot-shield");
@@ -592,7 +540,7 @@ function bootShield(on) {                                                // لا
 }
 function auditEvt(type, target, summary) {
   if (!S || !S.rawAdd || !ACCESS.uid) return;
-  S.rawAdd("audit_logs", { ws: ACCESS.scope || ACCESS.ws, workspaceId: ACCESS.scope || ACCESS.ws, uid: ACCESS.uid, name: ACCESS.name || ACCESS.email || "", role: ACCESS.tpl || ACCESS.role || "", siteId: (ACCESS.sites || ["*"])[0], type, target: String(target || ""), summary: String(summary || "").slice(0, 300), at: Date.now() }).catch(() => {});
+  S.rawAdd("audit_logs", { ws: ACCESS.scope || ACCESS.ws, uid: ACCESS.uid, name: ACCESS.name || ACCESS.email || "", role: ACCESS.tpl || ACCESS.role || "", siteId: (ACCESS.sites || ["*"])[0], type, target: String(target || ""), summary: String(summary || "").slice(0, 300), at: Date.now() }).catch(() => {});
 }
 document.addEventListener("click", ev => { if (ev.target.closest("#export-btn")) auditEvt("export", "reports", "تصدير تقرير"); }, true);
 
@@ -616,12 +564,18 @@ const findRec = (col, id) => {
   const pool = { vehicles, expenses, advances, operations, inventory, costings: typeof costings !== "undefined" ? costings : [], materials: typeof matList !== "undefined" ? matList : [], biz: [...(typeof xbiz !== "undefined" ? xbiz : []), ...(typeof biz !== "undefined" ? biz : [])], acct: typeof acct !== "undefined" ? acct : [] };
   return (pool[col] || []).find(x => x.id === id);
 };
-function hookAudit() { /* م9: التغليف الوحيد في wrapAudit (app.js) — يكتب auditlog وaudit_logs معاً */ }
+function hookAudit() {                                                   // كل إضافة/تعديل/حذف في الوحدات تُسجَّل في audit_logs
+  if (!S || S._aud) return; S._aud = true;
+  const AUD = ["vehicles", "expenses", "advances", "inventory", "operations", "biz", "acct", "costings", "materials"], s0 = S.save.bind(S), r0 = S.remove.bind(S);
+  const brief = d => [d.number || d.name || d.title || d.vehicleNo || d.category || "", d.amount != null ? "مبلغ " + d.amount : "", d.note || d.notes || ""].filter(Boolean).join(" · ").slice(0, 200);
+  S.save = async (col, d, id) => { const r = await s0(col, d, id); if (AUD.includes(col) && !userOp(col, d)) auditEvt(id ? "edit" : "create", col + "/" + (id || r), brief(d || {})); return r; };
+  S.remove = async (col, id) => { const lbl = brief(findRec(col, id) || {}) || id; const r = await r0(col, id); if (AUD.includes(col)) auditEvt("delete", col + "/" + id, lbl); return r; };   // اسم العنصر المقروء بدل الـ ID
+}
 const alRows = () => { const q = (accData.q || "").trim(), f = accData.f ? dayStart(accData.f) : 0, t = accData.to ? dayEnd(accData.to) : 0;
-  return (accData.al || []).filter(r => (!q || JSON.stringify(r).includes(q)) && (!accData.t || r.type === accData.t) && (!f || r.at >= f) && (!t || r.at <= t)); };
+  return (accData.al || []).filter(r => (!q || JSON.stringify(r).includes(q)) && (!accData.t || r.type === accData.t) && (!accData.u || r.name === accData.u) && (!accData.s || r.siteId === accData.s) && (!f || r.at >= f) && (!t || r.at <= t)); };
 function alertsList() {
   const o = [];
-  if (myCo && !isDev()) { const d = dayLeft(myCo); if (locked()) o.push("🔒 اشتراك شركتك منتهٍ — جدّد لاستعادة الإضافة والتعديل."); else if (d <= 7) o.push(`⏳ ينتهي اشتراك شركتك خلال ${d} يوم.`); }
+  if (myCo && !isDev()) { const d = dayLeft(myCo); if (locked()) o.push("🔒 اشتراك شركتك منتهٍ — جدّد لاستعادة الإضافة والتعديل."); else if (d <= 0) o.push("⚠️ انتهى اشتراكك وأنت في فترة السماح — جدّد قبل التحويل إلى قراءة فقط."); else if (d <= 7) o.push(`⏳ ينتهي اشتراك شركتك خلال ${d} يوم.`); }
   if (canPage()) { const n = accUsers().filter(u => u.status === "pending").length; if (n) o.push(`👤 ${n} طلب انضمام بانتظار الاعتماد.`); }
   if (isDev()) { const n = rnList.filter(r => r.status === "pending").length, e = companies.filter(x => x.status === "active" && dayLeft(x) > 0 && dayLeft(x) <= 7).length; if (n) o.push(`💳 ${n} طلب تجديد بانتظار الاعتماد.`); if (e) o.push(`⏳ ${e} شركة ينتهي اشتراكها خلال 7 أيام.`); }
   try { const n = activeVehicles().filter(v => oilLeft(v) <= 0).length; if (n) o.push(`🛢️ ${n} معدة تجاوزت موعد تغيير الزيت.`); } catch (e) {}
@@ -646,8 +600,8 @@ function renewalForm() {
   return `<div class="border rounded-xl p-3 space-y-2"><b>حوّلت المبلغ؟ سجّل طلب التجديد</b><select id="rn-plan" class="inp"><option value="month">الشهرية (30 يوماً)</option><option value="quarter">ربع السنوية (90 يوماً)</option><option value="year">السنوية (365 يوماً)</option></select><input id="rn-ref" class="inp" placeholder="رقم عملية التحويل / الرقم المحوّل منه"><input id="rn-file" type="file" accept="image/*" class="inp"><button data-rn class="btn">إرسال طلب التجديد</button></div>`;
 }
 async function cloudUpload(file) {
-  try { cl = cl || await S.get("app_config", "cloudinary"); } catch (e) { cl = null; }
-  if (!cl || !cl.cloud || !cl.preset) { if (S.upload) return await S.upload(file); throw new Error("cloudinary"); }   // بديل: ImgBB
+  cl = cl || await S.get("app_config", "cloudinary");
+  if (!cl || !cl.cloud || !cl.preset) throw new Error("cloudinary");
   const fd = new FormData(); fd.append("file", file); fd.append("upload_preset", cl.preset);
   const j = await (await fetch(`https://api.cloudinary.com/v1_1/${encodeURIComponent(cl.cloud)}/auto/upload`, { method: "POST", body: fd })).json();
   if (!j.secure_url) throw new Error("upload"); return j.secure_url;
@@ -678,8 +632,101 @@ async function restoreBackup(file) {
 }
 function injectBackup() {
   if ($("#bk-card") || !canPage()) return;
-  const old = $("#bk-json"); if (old) old.classList.add("hidden");   // نخفي زر JSON القديم فقط؛ أزرار Excel وCSV تبقى
+  const old = $("#bk-json"), oc = old && old.closest(".card"); if (oc) oc.classList.add("hidden");   // بطاقة النسخ الاحتياطي القديمة
   const c = document.createElement("div"); c.id = "bk-card"; c.className = "card space-y-2 mb-3";
   c.innerHTML = `<h3 class="font-extrabold">النسخ الاحتياطي</h3><div class="flex flex-wrap gap-2"><button id="bk-exp" class="btn">تصدير نسخة احتياطية (JSON)</button><label class="btn cursor-pointer">استعادة من نسخة احتياطية<input id="bk-file" type="file" accept="application/json" class="hidden"></label></div>`;
   $("#view-settings").prepend(c); $("#bk-exp").onclick = exportBackup; $("#bk-file").onchange = e => { if (e.target.files[0]) restoreBackup(e.target.files[0]); e.target.value = ""; };
 }
+
+/* ---------- رسائل صوتية + تهيئة سريعة + أدوات إدخال + نطاق التكاليف والمواد (v26) ---------- */
+const inScope = r => (r.workspaceId || "main") === ACCESS.scope && (!restricted() || ACCESS.sites.includes(r.siteId));
+let rec = null;
+async function toggleRec() {                                             // تسجيل حتى 40 ثانية بمعدل بت منخفض، يُحفظ داخل مستند الرسالة
+  const btn = $("#chat-mic"); if (rec) return rec.stop();
+  try {
+    const st = await navigator.mediaDevices.getUserMedia({ audio: true }), mt = ["audio/webm;codecs=opus", "audio/mp4"].find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t));
+    if (!mt) { st.getTracks().forEach(t => t.stop()); return alert("المتصفح لا يدعم التسجيل الصوتي."); }
+    const ch = []; rec = new MediaRecorder(st, { mimeType: mt, audioBitsPerSecond: 12000 }); btn.textContent = "⏹";
+    const timer = setTimeout(() => rec && rec.stop(), 40000);
+    rec.ondataavailable = e => ch.push(e.data);
+    rec.onstop = async () => {
+      clearTimeout(timer); st.getTracks().forEach(t => t.stop()); btn.textContent = "🎤"; rec = null;
+      const blob = new Blob(ch, { type: mt }); if (blob.size > 70000) return alert("التسجيل طويل، اجعله أقصر (حتى 40 ثانية).");
+      const uri = await new Promise(r => { const f = new FileReader(); f.onload = () => r(f.result); f.readAsDataURL(blob); }); sendChat(null, uri);
+    };
+    rec.start();
+  } catch (e) { rec = null; alert("تعذر الوصول للميكروفون."); }
+}
+function renderOnboard() {
+  let b = $("#onb"); if (!b) { b = document.createElement("div"); b.id = "onb"; b.className = "card mb-3 text-sm"; $("#view-dashboard").prepend(b); }
+  if (!isAdm() || !myCo) return b.classList.add("hidden");
+  const st = [["إضافة موقع", (myCo.sites || []).length > 0], ["إضافة معدة", vehicles.length > 0], ["إنشاء حساب موظف", urs.filter(u => u.status === "active").length > 1], ["تسجيل أول عملية", expenses.length + operations.length > 0]];
+  b.classList.toggle("hidden", st.every(x => x[1]));
+  b.innerHTML = `<b>تهيئة سريعة لشركتك</b><div class="flex flex-wrap gap-3 mt-2">${st.map(x => `<span>${x[1] ? "✅" : "⬜"} ${x[0]}</span>`).join("")}</div>`;
+}
+document.addEventListener("input", e => {
+  const t = e.target;
+  if (t.tagName === "INPUT" && (t.type === "tel" || t.inputMode === "numeric" || t.inputMode === "decimal") && /[٠-٩۰-۹]/.test(t.value)) t.value = t.value.replace(/[٠-٩]/g, d => d.charCodeAt(0) - 1632).replace(/[۰-۹]/g, d => d.charCodeAt(0) - 1776).replace(/[٫،]/g, ".");
+  if (t.id === "reg-pass") {                                             // مؤشر قوة كلمة المرور
+    const v = t.value; let s = 0; if (v.length >= 8) s++; if (/[A-Za-z]/.test(v) && /\d/.test(v)) s++; if (/[^A-Za-z0-9]/.test(v) || v.length >= 12) s++;
+    let m = $("#pw-meter"); if (!m) { m = document.createElement("div"); m.id = "pw-meter"; m.className = "text-xs mb-2"; t.after(m); }
+    m.textContent = ["ضعيفة جداً", "ضعيفة", "جيدة", "قوية"][s]; m.style.color = ["#dc2626", "#ea580c", "#ca8a04", "#16a34a"][s];
+  }
+});
+
+/* ---------- مساعد ميكسار الذكي (عبر Cloudflare Worker) + طلبات الاشتراك + أكواد الخصم + أرقام عربية (v27) ---------- */
+let aiUrl = "";
+const aiCard = () => `<div class="border rounded-xl p-3 mb-3 space-y-2"><div class="font-bold">مساعد ميكسار الذكي (رابط الـ Worker)</div><div class="flex gap-2"><input id="ai-url" class="inp" dir="ltr" placeholder="https://xxxx.workers.dev" value="${esc((accData.ai || {}).url || "")}"><button data-a="aisave" class="btn">حفظ</button></div><div class="text-xs text-slate-500">بدون رابط يختفي زر المساعد عند الجميع. المفتاح محفوظ في الـ Worker فقط.</div></div>`;
+function promoBlock(p) {
+  const l = p.promoList || [];
+  return `<div class="flex flex-wrap gap-2 items-center text-sm"><b>أكواد الخصم:</b>${l.map(x => `<span class="bg-slate-100 rounded-lg px-2 py-1">${esc(x.code)} — ${x.pct}% <button data-a="pmdel" data-id="${esc(x.code)}" class="text-red-600 font-bold">✕</button></span>`).join("") || "<span class='text-slate-500'>لا أكواد</span>"}<input id="pm-code" class="inp !w-28" placeholder="RAMY10"><input id="pm-pct" type="number" class="inp !w-20" placeholder="%"><button data-a="pmadd" class="btn">إضافة</button></div>`;
+}
+async function loadAi() {
+  aiUrl = ""; if (S.get) { try { const d = await S.get("app_config", "ai_proxy"); aiUrl = d && /^https:\/\//.test(d.url || "") ? d.url : ""; } catch (e) {} }
+  let f = $("#ai-fab");
+  if (!f) {
+    f = document.createElement("button"); f.id = "ai-fab"; f.className = "fixed bottom-4 left-20 z-40 w-14 h-14 rounded-full text-white text-2xl shadow-lg no-print"; f.style.background = "#1e3a5f"; f.textContent = "✨";
+    const p = document.createElement("div"); p.id = "ai-panel"; p.className = "hidden fixed bottom-20 left-4 z-40 w-[22rem] max-w-[calc(100vw-2rem)] bg-white rounded-2xl shadow-2xl border p-3 space-y-2 no-print";
+    p.innerHTML = `<div class="font-extrabold">مساعد ميكسار الذكي</div><div id="ai-out" class="text-sm whitespace-pre-wrap max-h-64 overflow-y-auto bg-slate-50 rounded-xl p-2 min-h-[4rem]">اسألني عن معداتك أو أرقام شركتك.</div><div class="flex gap-2"><input id="ai-in" class="inp !py-1.5" placeholder="اكتب سؤالك..."><button id="ai-go" class="btn !px-3 !py-1.5">اسأل</button></div>`;
+    document.body.append(f, p); f.onclick = () => p.classList.toggle("hidden"); $("#ai-go").onclick = askAi; $("#ai-in").onkeydown = e => { if (e.key === "Enter") askAi(); };
+  }
+  f.classList.toggle("hidden", !aiUrl); if (!aiUrl) $("#ai-panel").classList.add("hidden");
+}
+async function askAi() {
+  const q = $("#ai-in").value.trim().slice(0, 800), out = $("#ai-out"); if (!q || askAi.busy) return; askAi.busy = true; out.textContent = "جارٍ التحليل…";
+  try {
+    const kinds = {}; xbiz.forEach(x => { kinds[x.kind] = (kinds[x.kind] || 0) + 1; });
+    const ctx = { role: ACCESS.tpl || ACCESS.role, sites: ACCESS.sites, tab: (document.querySelector(".view:not(.hidden)") || {}).id || "", vehicles: { total: vehicles.length, active: activeVehicles().length }, advances: advances.length, expensesCount: expenses.length, records: kinds };
+    if (canSeeMoney()) ctx.expensesTotal = expenses.reduce((s, e) => s + (+e.amount || 0), 0);
+    const t = await S.idToken(), r = await fetch(aiUrl, { method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + t }, body: JSON.stringify({ question: q, context: ctx }) });
+    const j = await r.json(); out.textContent = j.answer || j.error || "لا توجد إجابة.";
+  } catch (e) { out.textContent = "تعذر الاتصال بالمساعد حالياً."; }
+  askAi.busy = false;
+}
+function graceBar() {
+  let b = $("#grace-bar"); const g = myCo && myCo.status === "active" && !isDev() && toMs(myCo.expiresAt) < Date.now() && !locked();
+  if (!g) return b && b.remove();
+  if (!b) { b = document.createElement("div"); b.id = "grace-bar"; b.className = "bg-orange-500 text-white text-sm font-bold p-2 text-center"; $("header").after(b); }
+  b.textContent = `انتهى اشتراكك — أنت في فترة سماح 72 ساعة (متبقٍ ${Math.max(0, Math.ceil((toMs(myCo.expiresAt) + GRACE - Date.now()) / 36e5))} ساعة) قبل تحويل الحساب إلى قراءة فقط`;
+}
+async function startSession() {                                          // مقعد واحد: الجديد يُمنع إن كانت جلسة أخرى نشطة، أو يطرد القديمة بقرار المستخدم
+  if (isDev() || !S.listen || !myCo || planInfo(myCo).maxUsers !== 1 || startSession.done) return; startSession.done = true;
+  ACCESS.sid = Math.random().toString(36).slice(2) + Date.now().toString(36);
+  let cur = null; try { cur = await S.get("sessions", ACCESS.uid); } catch (e) {}
+  const begin = async () => {
+    try { await S.rawSet("sessions", ACCESS.uid, { ws: ACCESS.ws, sid: ACCESS.sid, device: deviceInfo().slice(0, 120), at: Date.now() }); } catch (e) { return; }
+    setInterval(() => S.rawSet("sessions", ACCESS.uid, { at: Date.now() }).catch(() => {}), 45000);
+    S.listen("sessions", ACCESS.ws, rows => { const m = rows.find(r => r.id === ACCESS.uid); if (m && m.sid !== ACCESS.sid) { alert("تم الدخول بهذا الحساب من جهاز آخر، وسيتم إنهاء هذه الجلسة."); S.logout().then(() => location.reload()); } });
+  };
+  if (cur && cur.sid && Date.now() - toMs(cur.at) < 180000) {
+    const o = document.createElement("div"); o.className = "fixed inset-0 z-[95] bg-white grid place-items-center p-4"; o.dir = "rtl";
+    o.innerHTML = `<div class="max-w-sm w-full text-center space-y-3"><div class="text-4xl">🔒</div><h2 class="font-extrabold text-lg">هذا الحساب مفتوح حالياً على جهاز آخر</h2><p class="text-sm text-slate-600">${esc(cur.device || "جهاز غير معروف")}</p><button data-take class="btn w-full">إنهاء الجلسة القديمة والدخول من هذا الجهاز</button><button data-out class="w-full py-2.5 rounded-xl bg-slate-200 font-bold">تسجيل الخروج</button></div>`;
+    o.querySelector("[data-take]").onclick = () => { o.remove(); begin(); }; o.querySelector("[data-out]").onclick = async () => { await S.logout(); location.reload(); };
+    return document.body.appendChild(o);
+  }
+  begin();
+}
+(function numFix() {                                                     // حقول الأرقام: نص بلوحة عشرية ليقبل الأرقام العربية ثم تُحوَّل تلقائياً
+  const fix = r => (r.querySelectorAll ? r.querySelectorAll('input[type="number"]') : []).forEach(i => { i.type = "text"; i.inputMode = "decimal"; });
+  fix(document); new MutationObserver(ms => ms.forEach(m => m.addedNodes.forEach(n => n.nodeType === 1 && (n.matches && n.matches('input[type="number"]') ? (n.type = "text", n.inputMode = "decimal") : fix(n))))).observe(document.body, { childList: true, subtree: true });
+})();
