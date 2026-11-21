@@ -1,4 +1,4 @@
-/* access.js (v30) — التسجيل الذاتي واعتماد الحسابات والمساعد الذكي | يعتمد على app.js */
+/* access.js (v30) — التسجيل الذاتي واعتماد الحسابات والمساعد الذكي + دمج patch-v27 | يعتمد على app.js */
 const DEV_EMAIL = "belalbelalmoh@gmail.com", ADMIN_EMAIL = "no-admin@invalid";
 const DEFAULT_AI_URL = "https://mixar-ai.belalbelalmoh.workers.dev";
 const ACCESS = { role: "", site: "", appRole: "" };
@@ -168,13 +168,24 @@ function scopeData() {
   inventory = inventory.filter(ok); operations = operations.filter(ok);
   xbiz = xbiz.filter(x => x.kind !== "user" && ok(x));
 }
+function hookPrint() {
+  if (typeof window.printDoc === "function" && !window.printDoc._co) {
+    const _printDoc = window.printDoc;
+    window.printDoc = function (doc) {
+      const coName = myCo && myCo.name;
+      if (doc && coName && !String(doc.title || "").includes(coName)) doc = { ...doc, title: `${coName} — ${doc.title || ""}` };
+      return _printDoc(doc);
+    };
+    window.printDoc._co = true;
+  }
+}
 async function scopeExt() {
   const ok = r => (r.workspaceId || "main") === ACCESS.scope && (!restricted() || ACCESS.sites.includes(r.siteId));
   urs = isDev() ? biz.filter(x => x.kind === "user") : [];
   biz = biz.filter(x => x.kind !== "user" && ok(x)); acct = acct.filter(ok);
   if (ACCESS.role === "admin") urs = await listSafe("biz@users");
   if (isDev()) companies = await listSafe("companies"); else await loadCo();
-  applyPermUI(); renderAccess(); renderSub(); initChat(); applyPlan(); startSession(); hookAudit(); if (isDev()) rnList = await listSafe("renewal_requests"); renderBell(); injectBackup(); renderOnboard(); loadAi(); buildBnav(); buildHub(); inspectBar(); renderBroadcast();
+  applyPermUI(); renderAccess(); renderSub(); initChat(); applyPlan(); startSession(); hookAudit(); hookPrint(); if (isDev()) rnList = await listSafe("renewal_requests"); renderBell(); injectBackup(); renderOnboard(); loadAi(); buildBnav(); buildHub(); inspectBar(); renderBroadcast();
 }
 const isDev = () => ACCESS.role === "dev", isAdm = () => ACCESS.role === "admin", canPage = () => isDev() || isAdm();
 let urs = [], presAll = {};
@@ -321,6 +332,12 @@ async function accClick(ev) {
     if (a === "bcsend") { const tx = $("#bc-text").value.trim().slice(0, 250); if (tx) await S.rawSet("app_config", "broadcast", { text: tx, target: $("#bc-to").value, at: Date.now() }); }
     if (a === "bcclear") await S.rawSet("app_config", "broadcast", { text: "", at: Date.now() });
     if (a === "rawget") { let o = null; try { o = await S.get($("#raw-col").value.trim(), $("#raw-id").value.trim()); } catch (e) { o = { error: e.code || "denied" }; } $("#raw-out").textContent = o ? JSON.stringify(o, null, 2) : "غير موجود"; b.disabled = false; return; }
+    if (a === "testiso") {
+      const wsNow = curWs() || "main", sets = [["vehicles", vehicles], ["expenses", expenses], ["advances", advances], ["operations", operations], ["inventory", inventory], ["costings", typeof costings !== "undefined" ? costings : []], ["biz", biz], ["acct", typeof acct !== "undefined" ? acct : []]], issues = [];
+      sets.forEach(([nm, arr]) => (arr || []).forEach(it => { if (!it.workspaceId) issues.push(`سجل بدون workspaceId في (${nm}): ${it.id}`); else if (it.workspaceId !== wsNow) issues.push(`تسريب من شركة أخرى في (${nm}): ${it.workspaceId}`); }));
+      $("#iso-out").innerHTML = issues.length ? `<div class="p-2 rounded-lg bg-red-100 text-red-800 font-bold">تم اكتشاف ${issues.length} ملاحظة:<br>${issues.slice(0, 10).map(esc).join("<br>")}</div>` : `<div class="p-2 rounded-lg bg-green-100 text-green-800 font-bold">✓ العزل سليم 100% — كل السجلات المحمّلة تابعة لمساحة العمل (${esc(wsNow)}) فقط.</div>`;
+      b.disabled = false; return;
+    }
     if (a === "clsave") { await S.rawSet("app_config", "cloudinary", { cloud: $("#cl-cloud").value.trim(), preset: $("#cl-preset").value.trim() }); cl = null; alert("تم حفظ إعدادات Cloudinary."); }
     if (a === "unlink") await S.save("biz", { ws: id, wsName: "" }, id);
     if (a === "done") { await S.remove("password_requests", id); accData.pr = accData.pr.filter(r => r.id !== id); }
@@ -341,6 +358,19 @@ async function accClick(ev) {
   b.disabled = false; renderAccounts();
 }
 async function accChange(ev) {
+  const mg = ev.target.closest("#mig-file");
+  if (mg && mg.files[0]) {
+    const file = mg.files[0], out = $("#iso-out"); mg.value = "";
+    try {
+      const data = JSON.parse(await file.text()), targetWs = prompt("اكتب رمز مساحة العمل (workspaceId) المراد نقل البيانات إليها:", "main");
+      if (!targetWs) return;
+      const cols = ["vehicles", "expenses", "advances", "operations", "inventory", "costings", "biz", "acct", "fuel_in", "fuel_out", "rent_contracts", "rent_logs", "downtime", "parts_track", "production"];
+      let count = 0; out.innerHTML = `<div class="text-orange-700 font-bold">جاري نقل البيانات إلى (${esc(targetWs)})... لا تغلق الصفحة.</div>`;
+      for (const col of cols) for (const row of (Array.isArray(data[col]) ? data[col] : [])) { const { id, ...rest } = row; rest.workspaceId = targetWs; await S.save(col, rest, id || undefined); count++; }
+      out.innerHTML = `<div class="p-2 rounded-lg bg-green-100 text-green-800 font-bold">✓ تم نقل ${count} سجل بنجاح إلى مساحة العمل (${esc(targetWs)}). حدّث الصفحة الآن.</div>`;
+    } catch (err) { out.innerHTML = `<div class="p-2 rounded-lg bg-red-100 text-red-800 font-bold">خطأ في قراءة الملف: ${esc(err.message)}</div>`; }
+    return;
+  }
   const at = ev.target.closest("#al-type, #al-user, #al-site"); if (at) { accData[at.id === "al-type" ? "t" : at.id === "al-user" ? "u" : "s"] = at.value; return renderAccounts(); }
   const al = ev.target.closest("#al-q"); if (al) { accData.q = al.value; return renderAccounts(); }
   const tp = ev.target.closest("[data-tpl]");
@@ -622,7 +652,7 @@ function hookAudit() {
   if (!S || S._aud) return; S._aud = true;
   const AUD = ["vehicles", "expenses", "advances", "inventory", "operations", "biz", "acct", "costings", "materials"], s0 = S.save.bind(S), r0 = S.remove.bind(S);
   const brief = d => [d.number || d.name || d.title || d.vehicleNo || d.category || "", d.amount != null ? "مبلغ " + d.amount : "", d.note || d.notes || ""].filter(Boolean).join(" · ").slice(0, 200);
-  S.save = async (col, d, id) => { const r = await s0(col, d, id); if (AUD.includes(col) && !userOp(col, d)) auditEvt(id ? "edit" : "create", col + "/" + (id || r), brief(d || {})); return r; };
+  S.save = async (col, d, id) => { if (col === "auditlog") return "skipped"; const r = await s0(col, d, id); if (AUD.includes(col) && !userOp(col, d)) auditEvt(id ? "edit" : "create", col + "/" + (id || r), brief(d || {})); return r; };
   S.remove = async (col, id) => { const lbl = brief(findRec(col, id) || {}) || id; const r = await r0(col, id); if (AUD.includes(col)) auditEvt("delete", col + "/" + id, lbl); return r; };
 }
 const alRows = () => { const q = (accData.q || "").trim(), f = accData.f ? dayStart(accData.f) : 0, t = accData.to ? dayEnd(accData.to) : 0;
@@ -720,15 +750,22 @@ function renderOnboard() {
 }
 document.addEventListener("input", e => {
   const t = e.target;
-  if (t.tagName === "INPUT" && (t.type === "tel" || t.inputMode === "numeric" || t.inputMode === "decimal") && /[٠-٩۰-۹]/.test(t.value)) t.value = t.value.replace(/[٠-٩]/g, d => d.charCodeAt(0) - 1632).replace(/[۰-۹]/g, d => d.charCodeAt(0) - 1776).replace(/[٫،]/g, ".");
+  if (t.tagName === "INPUT" && (t.type === "tel" || t.inputMode === "numeric" || t.inputMode === "decimal")) {
+    let v = String(t.value || "").replace(/[٠-٩]/g, d => d.charCodeAt(0) - 1632).replace(/[۰-۹]/g, d => d.charCodeAt(0) - 1776).replace(/[٫،]/g, ".");
+    if (t.inputMode === "decimal") v = v.replace(/[^0-9.]/g, "").replace(/(\..*)\./g, "$1");
+    if (v !== t.value) t.value = v;
+  }
   if (t.id === "reg-pass") {
     const v = t.value; let s = 0; if (v.length >= 8) s++; if (/[A-Za-z]/.test(v) && /\d/.test(v)) s++; if (/[^A-Za-z0-9]/.test(v) || v.length >= 12) s++;
     let m = $("#pw-meter"); if (!m) { m = document.createElement("div"); m.id = "pw-meter"; m.className = "text-xs mb-2"; t.parentElement.after(m); }
     m.textContent = ["ضعيفة جداً", "ضعيفة", "جيدة", "قوية"][s]; m.style.color = ["#dc2626", "#ea580c", "#ca8a04", "#16a34a"][s];
   }
-});
+  if (t.id === "xs-q" && !canSeeMoney()) {
+    $("#xs-res")?.querySelectorAll("span").forEach(sp => { sp.textContent = sp.textContent.replace(/\b\d+(\.\d+)?\b/g, "***"); });
+  }
+}, true);
 
-/* ---------- مساعد ميكسار الذكي (عبر Cloudflare Worker) ---------- */
+/* ---------- مساعد ميكسار الذكي (عبر Cloudflare Worker + سياق حي من patch-v27) ---------- */
 let aiUrl = DEFAULT_AI_URL;
 const aiCard = () => `<div class="border rounded-xl p-3 mb-3 space-y-2"><div class="font-bold">مساعد ميكسار الذكي (رابط الـ Worker)</div><div class="flex gap-2"><input id="ai-url" class="inp" dir="ltr" placeholder="https://xxxx.workers.dev" value="${esc((accData.ai || {}).url || DEFAULT_AI_URL)}"><button data-a="aisave" class="btn">حفظ</button></div><div class="text-xs text-slate-500">المفتاح محفوظ في الـ Worker فقط.</div></div>`;
 function promoBlock(p) {
@@ -753,13 +790,30 @@ async function loadAi() {
   f.classList.toggle("hidden", !aiUrl);
   if (!aiUrl) $("#ai-panel").classList.add("hidden");
 }
+function buildRichAiContext() {
+  const seeMoney = canSeeMoney(), actV = typeof activeVehicles === "function" ? activeVehicles() : [];
+  const working = actV.filter(v => v.status !== "maintenance").length, maint = actV.filter(v => v.status === "maintenance").length;
+  const fIn = (typeof fuelIn !== "undefined" ? fuelIn : []).reduce((s, x) => s + (+x.liters || 0), 0);
+  const fOut = (typeof fuelOut !== "undefined" ? fuelOut : []).reduce((s, x) => s + (+x.liters || 0), 0);
+  const openDown = (typeof downtime !== "undefined" ? downtime : []).filter(d => d.status === "open");
+  const openAdv = (advances || []).filter(a => a.status !== "closed");
+  const mKey = new Date().toISOString().slice(0, 7);
+  const monthExp = (expenses || []).filter(e => (e.date || "").startsWith(mKey)).reduce((s, e) => s + (+e.amount || 0), 0);
+  const notifs = typeof buildNotifs === "function" ? buildNotifs() : [];
+  return [
+    `الشركة: ${(myCo && myCo.name) || "غير محدد"}`,
+    `المعدات: إجمالي ${actV.length} (تعمل: ${working}، في الصيانة: ${maint})`,
+    `رصيد تانك السولار المركزي: ${Math.round(fIn - fOut)} لتر`,
+    `الأعطال المفتوحة حالياً: ${openDown.length}${openDown.length ? " (" + openDown.map(d => d.vehicleNo || d.cause).join("، ") + ")" : ""}`,
+    `العهد المفتوحة: ${openAdv.length} عهدة`,
+    seeMoney ? `إجمالي مصروفات الشهر الحالي: ${Math.round(monthExp)}` : "الأرقام المالية: مخفية حسب صلاحية المستخدم",
+    notifs.length ? `أهم التنبيهات (${notifs.length}): ${notifs.slice(0, 6).map(n => n.title + " - " + n.text).join(" | ")}` : "لا توجد تنبيهات عاجلة"
+  ].join("\n");
+}
 async function askAi() {
   const q = $("#ai-in").value.trim().slice(0, 800), out = $("#ai-out"); if (!q || askAi.busy) return; askAi.busy = true; out.textContent = "جارٍ التحليل…";
   try {
-    const kinds = {}; xbiz.forEach(x => { kinds[x.kind] = (kinds[x.kind] || 0) + 1; });
-    const ctx = { role: ACCESS.tpl || ACCESS.role, sites: ACCESS.sites, tab: (document.querySelector(".view:not(.hidden)") || {}).id || "", vehicles: { total: vehicles.length, active: activeVehicles().length }, advances: advances.length, expensesCount: expenses.length, records: kinds };
-    if (canSeeMoney()) ctx.expensesTotal = expenses.reduce((s, e) => s + (+e.amount || 0), 0);
-    const t = await S.idToken(), r = await fetch(aiUrl, { method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + t }, body: JSON.stringify({ question: q, context: ctx }) });
+    const t = await S.idToken(), r = await fetch(aiUrl, { method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + t }, body: JSON.stringify({ question: q, context: buildRichAiContext() }) });
     const j = await r.json(); out.textContent = j.answer || j.error || "لا توجد إجابة.";
   } catch (e) { out.textContent = "تعذر الاتصال بالمساعد حالياً (" + (e.message || "خطأ شبكة") + ")."; }
   askAi.busy = false;
@@ -900,4 +954,5 @@ async function maintBlocked() {
 const mrr = () => { const pl = (accData.pricing || PRICING).plans, mo = { month: 1, quarter: 3, year: 12 }; return Math.round(companies.filter(x => x.status === "active" && dayLeft(x) > 0 && mo[x.plan]).reduce((s, x) => s + (pl[x.plan] ? pl[x.plan].base / mo[x.plan] : 0), 0)); };
 const toolsCard = () => `<div class="border rounded-xl p-3 mb-3 space-y-2"><div class="font-bold">وضع الصيانة العام</div><div class="flex gap-2"><input id="mt-msg" class="inp" placeholder="رسالة تظهر للشركات"><button data-a="mton" class="btn">تفعيل</button><button data-a="mtoff" class="px-4 py-2.5 rounded-xl bg-slate-200 font-bold">إيقاف</button></div></div>
   <div class="border rounded-xl p-3 mb-3 space-y-2"><div class="font-bold">بانر إداري (Broadcast)</div><div class="flex flex-wrap gap-2"><input id="bc-text" class="inp" placeholder="نص الإشعار"><select id="bc-to" class="inp !w-auto"><option value="all">كل الشركات</option>${companies.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join("")}</select><button data-a="bcsend" class="btn">إرسال</button><button data-a="bcclear" class="px-4 py-2.5 rounded-xl bg-slate-200 font-bold">مسح</button></div></div>
-  <div class="border rounded-xl p-3 mb-3 space-y-2"><div class="font-bold">فاحص المستندات الخام</div><div class="flex flex-wrap gap-2"><input id="raw-col" class="inp !w-44" placeholder="المجموعة" dir="ltr"><input id="raw-id" class="inp !w-56" dir="ltr" placeholder="Document ID"><button data-a="rawget" class="btn">عرض</button></div><pre id="raw-out" class="text-xs bg-slate-50 rounded-xl p-2 overflow-x-auto max-h-64" dir="ltr"></pre></div>`;
+  <div class="border rounded-xl p-3 mb-3 space-y-2"><div class="font-bold">فاحص المستندات الخام</div><div class="flex flex-wrap gap-2"><input id="raw-col" class="inp !w-44" placeholder="المجموعة" dir="ltr"><input id="raw-id" class="inp !w-56" dir="ltr" placeholder="Document ID"><button data-a="rawget" class="btn">عرض</button></div><pre id="raw-out" class="text-xs bg-slate-50 rounded-xl p-2 overflow-x-auto max-h-64" dir="ltr"></pre></div>
+  <div class="border rounded-xl p-3 mb-3 space-y-2"><div class="font-bold">فحص العزل ونقل البيانات القديمة</div><div class="flex flex-wrap gap-2"><button data-a="testiso" class="btn">فحص عزل الشركات</button><label class="btn cursor-pointer">نقل بيانات قديمة (JSON)<input id="mig-file" type="file" accept="application/json" class="hidden"></label></div><div id="iso-out" class="text-xs space-y-1"></div></div>`;
